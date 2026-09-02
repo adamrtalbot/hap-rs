@@ -7,11 +7,11 @@
 //! second normalization + aggregation passes.
 //!
 //! We compute a global pairwise alignment between `ref_allele` and
-//! `alt_allele` using Needleman-Wunsch with linear gap penalties and a
-//! deterministic tie-breaking rule (prefer diagonal → horizontal → vertical,
-//! which steers gaps to the right and keeps the output consistent with the
-//! legacy C++ aligner on the samples used by the chr21 fixtures). The
-//! resulting CIGAR is then decomposed into [`RefVar`] primitives.
+//! `alt_allele` using Gotoh affine gaps with the legacy klib (`ksw`) scores,
+//! plus a deterministic tie-breaking rule that right-aligns gaps: gap layers
+//! win over a diagonal step on equal score, and an open gap prefers to keep
+//! extending rather than close and reopen. The resulting CIGAR is then
+//! decomposed into [`RefVar`] primitives.
 //!
 //! Primitive conventions follow legacy semantics (inherited from
 //! `partial_credit::RefVar`):
@@ -145,11 +145,14 @@ fn score_of(a: u8, b: u8) -> i32 {
 /// (ends in an insertion — a gap in ref), and `f` (ends in a deletion — a gap
 /// in alt). A gap of `len` costs `GAP_OPEN + len * GAP_EXTEND`.
 ///
-/// Tie-breaking mirrors legacy `ksw_global`, which right-aligns gaps: on equal
-/// score a diagonal step is preferred over opening a gap, and among gap layers
-/// the alignment prefers to *keep extending* an already-open gap rather than
-/// close and reopen it. This keeps a complex allele's indel contiguous and at
-/// the right-hand end of the aligned block.
+/// Tie-breaking mirrors legacy `ksw_global`, which right-aligns gaps. Among
+/// gap layers the alignment prefers to *keep extending* an already-open gap
+/// rather than close and reopen it, keeping a complex allele's indel
+/// contiguous. At a diagonal step the predecessor search prefers a gap layer
+/// over `Match` on equal score, which pushes the gap towards the right-hand
+/// end of the aligned block: `AAAGAAAAGAAAG` to `GGAAAAGAAAA` scores the same
+/// with the two-base deletion before or after the leading mismatch, and legacy
+/// emits the mismatch first (HG003 PEPPER chr1:88047087).
 fn needleman_wunsch(ref_allele: &[u8], alt_allele: &[u8]) -> Vec<Op> {
     let m = ref_allele.len();
     let n = alt_allele.len();
@@ -204,12 +207,12 @@ fn needleman_wunsch(ref_allele: &[u8], alt_allele: &[u8]) -> Vec<Op> {
             let diag_prev = h[i - 1][j - 1].max(e[i - 1][j - 1]).max(f[i - 1][j - 1]);
             h[i][j] = diag_prev + score_of(ref_allele[i - 1], alt_allele[j - 1]);
             h_from[i][j] =
-                if h[i - 1][j - 1] >= e[i - 1][j - 1] && h[i - 1][j - 1] >= f[i - 1][j - 1] {
-                    Layer::Match
-                } else if e[i - 1][j - 1] >= f[i - 1][j - 1] {
+                if f[i - 1][j - 1] >= e[i - 1][j - 1] && f[i - 1][j - 1] >= h[i - 1][j - 1] {
+                    Layer::Delete
+                } else if e[i - 1][j - 1] >= h[i - 1][j - 1] {
                     Layer::Insert
                 } else {
-                    Layer::Delete
+                    Layer::Match
                 };
         }
     }
@@ -405,9 +408,9 @@ mod tests {
 
     #[test]
     fn cga_to_c_yields_two_base_deletion() {
-        // Global NW prefers the aligned "C" to stay matched, putting the
-        // deletion at the end. Other alignments score worse under
-        // MATCH=2, MISMATCH=-4, GAP=-4.
+        // The affine alignment keeps the leading "C" matched and puts the
+        // two-base deletion at the end; every other alignment scores worse
+        // under MATCH=1, MISMATCH=-4, GAP_OPEN=6, GAP_EXTEND=1.
         let primitives = realign_ref_var(10, b"CGA", b"C");
         assert_eq!(primitives.len(), 1);
         assert_eq!(primitives[0].start, 11);
@@ -460,6 +463,32 @@ mod tests {
         assert_eq!(primitives.len(), 1, "{primitives:?}");
         assert_eq!((primitives[0].start, primitives[0].end), (18, 17));
         assert_eq!(primitives[0].alt, "C");
+    }
+
+    #[test]
+    fn affine_right_aligns_a_gap_that_ties_with_a_leading_mismatch() {
+        // HG003 PEPPER chr1:88047087. `AAAGAAAAGAAAG` to `GGAAAAGAAAA` has two
+        // equal-scoring alignments (9 matches, 2 mismatches, one 2-base gap):
+        // the gap before or after the leading mismatch. Legacy klib emits the
+        // mismatch first, leaving the deletion at 88047088..88047089.
+        let primitives = realign_ref_var(88_047_087, b"AAAGAAAAGAAAG", b"GGAAAAGAAAA");
+        assert_eq!(primitives.len(), 3, "{primitives:?}");
+        assert_eq!(
+            (primitives[0].start, primitives[0].alt.as_str()),
+            (88_047_087, "G")
+        );
+        assert_eq!(
+            (
+                primitives[1].start,
+                primitives[1].end,
+                primitives[1].alt.as_str()
+            ),
+            (88_047_088, 88_047_089, "")
+        );
+        assert_eq!(
+            (primitives[2].start, primitives[2].alt.as_str()),
+            (88_047_099, "A")
+        );
     }
 
     #[test]

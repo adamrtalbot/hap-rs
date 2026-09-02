@@ -1,0 +1,10 @@
+##fileformat=VCFv4.2
+##contig=<ID=chrA,length=100>
+##FILTER=<ID=PASS,Description="All filters passed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+chrA	51	.	AGAAAAGAAAAAAGAAAAGAAAG	A	30	PASS	.	GT:GQ:DP:AD	1/0:30:20:0,10
+chrA	61	.	AAAGAAAAGAAAG	GGAAAAGAAAA	30	PASS	.	GT:GQ:DP:AD	0/1:30:20:0,10

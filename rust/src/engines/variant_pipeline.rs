@@ -960,12 +960,23 @@ fn aggregate_location_records_inner(
         .iter()
         .all(|record| record.ref_allele.len() > record.alt_allele.len());
     if both_deletions {
-        let mixed_is_longer = records
+        // Two opposite-haplotype deletions of different span stay two rows when
+        // exactly one of them is a mixed-edit primitive, whichever is longer:
+        // chr2:60749238 (mixed longer) and HG003 PEPPER chr1:78100940 `ATAC>A`
+        // from `TACAC>AT` beside a raw `ATACACACAC>A` (mixed shorter). Both
+        // mixed (chr10:34496891, chr4:6943863 where the longer deletion is a
+        // pre-scanned merge partner) or both ordinary still fold into a het-alt.
+        let exactly_one_mixed = records
             .iter()
-            .find(|record| record.mixed_edit_primitive)
-            .zip(records.iter().find(|record| !record.mixed_edit_primitive))
-            .is_some_and(|(mixed, ordinary)| mixed.ref_allele.len() > ordinary.ref_allele.len());
-        if opposite_slots && mixed_is_longer {
+            .filter(|record| record.mixed_edit_primitive)
+            .count()
+            == 1;
+        if opposite_slots && exactly_one_mixed {
+            // Legacy emits the shorter span first (chr1:245924655 `CT>C` then
+            // `CTTTT>C`); on an equal span it emits the direct record ahead of
+            // the one recovered from a complex allele (chr1:118558359 `TGAGA>T`
+            // 0/1 then 1/0).
+            records.sort_by_key(|record| (record.ref_allele.len(), record.mixed_edit_primitive));
             return records;
         }
     }
@@ -1432,12 +1443,33 @@ mod tests {
     }
 
     #[test]
+    fn location_aggregator_keeps_opposite_slot_mixed_shorter_deletion_separate() {
+        // HG003 PEPPER chr1:78100940: `TACAC>AT` decomposes to a mixed `ATAC>A`
+        // beside the raw ordinary `ATACACACAC>A` on the other haplotype. The
+        // pinned pre.py emits both deletions as separate rows.
+        let mut mixed_shorter = make_record("chr1", 78_100_940, "ATAC", "A", "GT", "1/0");
+        mixed_shorter.mixed_edit_primitive = true;
+        let ordinary_longer = make_record("chr1", 78_100_940, "ATACACACAC", "A", "GT", "0/1");
+
+        let out = aggregate_location_records(vec![ordinary_longer, mixed_shorter]);
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].ref_allele, "ATAC");
+        assert_eq!(out[0].samples[0], "1/0");
+        assert_eq!(out[1].ref_allele, "ATACACACAC");
+        assert_eq!(out[1].samples[0], "0/1");
+    }
+
+    #[test]
     fn location_aggregator_merges_mixed_shorter_deletion_first() {
+        // HG001 chr10:34496891: the longer deletion reaches the aggregator as a
+        // pre-scanned mixed merge partner, so both records carry the mixed flag.
         let mut mixed_shorter = make_record("chr10", 34_496_891, "AAAA", "A", "GT", "1/0");
         mixed_shorter.mixed_edit_primitive = true;
-        let ordinary_longer = make_record("chr10", 34_496_891, "AAAATAGTATAC", "A", "GT", "0/1");
+        let mut partner_longer = make_record("chr10", 34_496_891, "AAAATAGTATAC", "A", "GT", "0/1");
+        partner_longer.mixed_edit_primitive = true;
 
-        let out = aggregate_location_records(vec![mixed_shorter, ordinary_longer]);
+        let out = aggregate_location_records(vec![mixed_shorter, partner_longer]);
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].ref_allele, "AAAATAGTATAC");
