@@ -8,9 +8,8 @@
 //!
 //! We compute a global pairwise alignment between `ref_allele` and
 //! `alt_allele` using Gotoh affine gaps with the legacy klib (`ksw`) scores,
-//! plus a deterministic tie-breaking rule that right-aligns gaps: gap layers
-//! win over a diagonal step on equal score, and an open gap prefers to keep
-//! extending rather than close and reopen. The resulting CIGAR is then
+//! plus deterministic tie-breaking rules: gap layers win over a diagonal step
+//! on equal score, and opening a gap wins over extending one. The result is then
 //! decomposed into [`RefVar`] primitives.
 //!
 //! Primitive conventions follow legacy semantics (inherited from
@@ -146,13 +145,8 @@ fn score_of(a: u8, b: u8) -> i32 {
 /// in alt). A gap of `len` costs `GAP_OPEN + len * GAP_EXTEND`.
 ///
 /// Tie-breaking mirrors legacy `ksw_global`, which right-aligns gaps. Among
-/// gap layers the alignment prefers to *keep extending* an already-open gap
-/// rather than close and reopen it, keeping a complex allele's indel
-/// contiguous. At a diagonal step the predecessor search prefers a gap layer
-/// over `Match` on equal score, which pushes the gap towards the right-hand
-/// end of the aligned block: `AAAGAAAAGAAAG` to `GGAAAAGAAAA` scores the same
-/// with the two-base deletion before or after the leading mismatch, and legacy
-/// emits the mismatch first (HG003 PEPPER chr1:88047087).
+/// On a tie, `f` wins over `e`, and `e` wins over a diagonal step; opening a
+/// gap wins over extending one. This is the ordering used by `ksw_global`.
 fn needleman_wunsch(ref_allele: &[u8], alt_allele: &[u8]) -> Vec<Op> {
     let m = ref_allele.len();
     let n = alt_allele.len();
@@ -181,10 +175,10 @@ fn needleman_wunsch(ref_allele: &[u8], alt_allele: &[u8]) -> Vec<Op> {
     for i in 1..=m {
         for j in 1..=n {
             // Insertion (gap in ref): alt advanced. Prefer extending an open
-            // insertion over reopening on a tie.
+            // insertion only when it is strictly better than reopening.
             let open_e = h[i][j - 1] - (GAP_OPEN + GAP_EXTEND);
             let extend_e = e[i][j - 1] - GAP_EXTEND;
-            if extend_e >= open_e {
+            if extend_e > open_e {
                 e[i][j] = extend_e;
                 e_from[i][j] = Layer::Insert;
             } else {
@@ -195,7 +189,7 @@ fn needleman_wunsch(ref_allele: &[u8], alt_allele: &[u8]) -> Vec<Op> {
             // Deletion (gap in alt): ref advanced.
             let open_f = h[i - 1][j] - (GAP_OPEN + GAP_EXTEND);
             let extend_f = f[i - 1][j] - GAP_EXTEND;
-            if extend_f >= open_f {
+            if extend_f > open_f {
                 f[i][j] = extend_f;
                 f_from[i][j] = Layer::Delete;
             } else {
@@ -488,6 +482,22 @@ mod tests {
         assert_eq!(
             (primitives[2].start, primitives[2].alt.as_str()),
             (88_047_099, "A")
+        );
+    }
+
+    #[test]
+    fn affine_places_the_large_gap_first_on_an_equal_cost_repeat_split() {
+        // HG003 PEPPER chr1:78142355. Both 5+1 and 1+5 deleted-base splits
+        // have the same score; legacy emits the five-base deletion first.
+        let primitives = realign_ref_var(78_142_355, b"TGTGTGTG", b"GT");
+        assert_eq!(primitives.len(), 2, "{primitives:?}");
+        assert_eq!(
+            (primitives[0].start, primitives[0].end),
+            (78_142_355, 78_142_359)
+        );
+        assert_eq!(
+            (primitives[1].start, primitives[1].end),
+            (78_142_362, 78_142_362)
         );
     }
 

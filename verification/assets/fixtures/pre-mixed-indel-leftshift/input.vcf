@@ -1,0 +1,6 @@
+##fileformat=VCFv4.2
+##contig=<ID=chrA,length=26>
+##FILTER=<ID=PASS,Description="All filters passed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+chrA	14	.	CAAA	AC	4	PASS	.	GT	0/1

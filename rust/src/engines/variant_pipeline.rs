@@ -130,7 +130,7 @@ pub(crate) fn primitive_split_with_context(
         })
     });
 
-    let mut output: Vec<(RawVcfRecord, bool)> = Vec::new();
+    let mut output: Vec<(RawVcfRecord, bool, usize)> = Vec::new();
     for (allele_idx, preserve_mixed_anchor, prims) in primitives {
         let target = (allele_idx + 1) as u32;
         for (prim, was_realigned) in prims {
@@ -154,7 +154,7 @@ pub(crate) fn primitive_split_with_context(
             ) {
                 let mut rec = rec;
                 rec.mixed_edit_primitive = preserve_mixed_anchor;
-                output.push((rec, preserve_mixed_anchor));
+                output.push((rec, preserve_mixed_anchor, allele_idx));
             }
         }
     }
@@ -166,7 +166,7 @@ pub(crate) fn primitive_split_with_context(
     // processed; the second primitive at the same input anchor sees the
     // first primitive's end as its leftshift floor and stays put — matching
     // legacy's `VariantAlleleNormalizer.cpp:209-238` behaviour.
-    output.sort_by(|(a, _), (b, _)| {
+    output.sort_by(|(a, _, _), (b, _, _)| {
         a.pos.cmp(&b.pos).then_with(|| {
             b.ref_allele
                 .len()
@@ -174,14 +174,28 @@ pub(crate) fn primitive_split_with_context(
                 .then(a.alt_allele.cmp(&b.alt_allele))
         })
     });
+    let mixed_snp_positions: Vec<(usize, usize)> = output
+        .iter()
+        .filter(|(record, mixed, _)| {
+            *mixed && record.ref_allele.len() == 1 && record.alt_allele.len() == 1
+        })
+        .map(|(record, _, allele_idx)| (*allele_idx, record.pos))
+        .collect();
     let mut current_maxpos = previous_end;
-    for (rec, preserve_mixed_anchor) in &mut output {
-        // The legacy primitive splitter emits the substitution and indel
-        // pieces of a mixed edit at their shared source anchor. Passing
-        // those pieces through the generic left shifter moves the indel to
-        // its trailing edge and changes both VCF identity and sibling
-        // aggregation (for example CAG>A must become C>A plus CAG>C).
-        if !*preserve_mixed_anchor {
+    for (rec, mixed, allele_idx) in &mut output {
+        // Keep a mixed indel beside a SNP from the same source allele when
+        // they share an anchor. Also retain non-indels and deletion anchors
+        // already constrained by the cross-record floor.
+        let indel = rec.ref_allele.len() != rec.alt_allele.len();
+        let blocked_deletion_anchor = rec.ref_allele.len() > rec.alt_allele.len()
+            && has_following_spanning_deletion
+            && (previous_end > rec.pos.saturating_sub(1)
+                || (equal_floor_blocked && previous_end == rec.pos.saturating_sub(1)));
+        let preserve_anchor = *mixed
+            && (!indel
+                || blocked_deletion_anchor
+                || mixed_snp_positions.contains(&(*allele_idx, rec.pos)));
+        if !preserve_anchor {
             shift_primitive_record(rec, reference, current_maxpos);
         }
         // Legacy advances from `nv.pos + nv.len - 1` of the emitted record,
@@ -196,7 +210,7 @@ pub(crate) fn primitive_split_with_context(
     // one base the records stay separate (matching legacy's per-position
     // primitive emission for mixed-length deletions).
     let mut aggregated = aggregate_same_position(
-        output.into_iter().map(|(record, _)| record).collect(),
+        output.into_iter().map(|(record, _, _)| record).collect(),
         &format_keys,
         phased,
     );
@@ -1821,6 +1835,33 @@ mod tests {
                 && record.ref_allele == "A"
                 && record.alt_allele == "AT"
                 && record.samples[0] == "1/0:5,9"
+        }));
+    }
+
+    #[test]
+    fn mixed_indels_shift_when_no_snp_shares_their_anchor() {
+        let reference = windowed_ref(
+            208_163_310,
+            b"TCCGGGAGGGAGGCGGGGGGGGGGGGGGTCGGCCAGCCGCCCCGTCCGGGAGGGAGGTGGGGGGGT",
+        );
+        let record = make_record(
+            "chr1",
+            208_163_338,
+            "TCGGCCAGCCGCCCCGTCCGGGAGGGAGGTG",
+            "GGTCGGCCAGCCGCCCCGTCCGGGAGGGAGGT",
+            "GT",
+            "0/1",
+        );
+        let output = primitive_split(&record, &reference);
+        assert!(output.iter().any(|record| {
+            record.pos == 208_163_323 && record.ref_allele == "C" && record.alt_allele == "CGG"
+        }));
+
+        let reference = windowed_ref(248_645_120, b"CTTAAAAAAAAAACAAAACAAAATCA");
+        let record = make_record("chr1", 248_645_133, "CAAA", "AC", "GT", "0/1");
+        let output = primitive_split(&record, &reference);
+        assert!(output.iter().any(|record| {
+            record.pos == 248_645_131 && record.ref_allele == "AAC" && record.alt_allele == "A"
         }));
     }
 
