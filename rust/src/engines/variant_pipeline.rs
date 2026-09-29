@@ -181,6 +181,20 @@ pub(crate) fn primitive_split_with_context(
         })
         .map(|(record, _, allele_idx)| (*allele_idx, record.pos))
         .collect();
+    let mixed_snp_deletion_positions = output
+        .iter()
+        .filter(|(snp, mixed, snp_idx)| {
+            *mixed
+                && snp.ref_allele.len() == 1
+                && snp.alt_allele.len() == 1
+                && output.iter().any(|(deletion, _, deletion_idx)| {
+                    deletion_idx == snp_idx
+                        && deletion.pos == snp.pos
+                        && deletion.ref_allele.len() > deletion.alt_allele.len()
+                })
+        })
+        .map(|(snp, _, allele_idx)| (*allele_idx, snp.pos))
+        .collect::<Vec<_>>();
     let mut current_maxpos = previous_end;
     for (rec, mixed, allele_idx) in &mut output {
         // Keep a mixed indel beside a SNP from the same source allele when
@@ -196,7 +210,19 @@ pub(crate) fn primitive_split_with_context(
                 || blocked_deletion_anchor
                 || mixed_snp_positions.contains(&(*allele_idx, rec.pos)));
         if !preserve_anchor {
-            shift_primitive_record(rec, reference, current_maxpos);
+            // The substitution/deletion pair belongs to one ALT. Its end
+            // must not floor the insertion on the other ALT; legacy can
+            // left-shift that insertion back to their shared source anchor.
+            let floor = if rec.ref_allele.len() < rec.alt_allele.len()
+                && mixed_snp_deletion_positions
+                    .iter()
+                    .any(|(snp_idx, snp_pos)| snp_idx != allele_idx && rec.pos == *snp_pos)
+            {
+                previous_end
+            } else {
+                current_maxpos
+            };
+            shift_primitive_record(rec, reference, floor);
         }
         // Legacy advances from `nv.pos + nv.len - 1` of the emitted record,
         // not from the wider source span that produced the primitive.
@@ -214,6 +240,38 @@ pub(crate) fn primitive_split_with_context(
         &format_keys,
         phased,
     );
+    // These opposite ALT primitives came from one source call, so aggregate
+    // them before the stream-level successor check can mistake the adjacent
+    // source record for a reason to keep them split.
+    if alts.len() == 2
+        && !mixed_snp_deletion_positions.is_empty()
+        && aggregated.len() == 3
+        && aggregated.iter().all(|part| part.pos == record.pos)
+    {
+        let snp = aggregated.iter().find(|part| record_is_snp(part)).cloned();
+        let insertion = aggregated
+            .iter()
+            .find(|part| part.ref_allele.len() < part.alt_allele.len())
+            .cloned();
+        let deletion = aggregated
+            .iter()
+            .find(|part| part.ref_allele.len() > part.alt_allele.len())
+            .cloned();
+        if let (Some(snp), Some(insertion), Some(deletion)) = (snp, insertion, deletion) {
+            let insertion_after_ref = alts.iter().any(|alt| {
+                alt.len() > record.ref_allele.len() && alt.starts_with(&record.ref_allele)
+            });
+            let pair = if insertion_after_ref {
+                vec![deletion, insertion]
+            } else {
+                vec![insertion, deletion]
+            };
+            let mut merged = aggregate_location_records_inner(pair, true, false);
+            if merged.len() == 1 {
+                aggregated = vec![snp, merged.remove(0)];
+            }
+        }
+    }
     if alts
         .iter()
         .any(|alt| allele_has_mixed_edit(&record.ref_allele, alt))
@@ -1263,6 +1321,126 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].alt_allele, "G");
         assert_eq!(out[0].samples[0], "0/1");
+    }
+
+    #[test]
+    fn deeptrio_mixed_repeat_keeps_insertion_with_its_deletion() {
+        // HG003 DeepTrio chr1:182360353, reduced to a 61-base GRCh38 window.
+        // Pinned hap.py 0.3.15 prepares one hetalt indel beside the SNP.
+        let reference = b"TTGGAGAAATATATATATATATATATATATAAAAAATGTTTTTAAGAAAATAATTTTGAAC";
+        let rec = make_record(
+            "chr1",
+            32,
+            "AA",
+            "ATATATATATATATATATATA,G",
+            "GT:AD",
+            "1/2:0,9,5",
+        );
+
+        let rows =
+            aggregate_location_records_with_successor(primitive_split(&rec, reference), true)
+                .into_iter()
+                .map(|row| {
+                    (
+                        row.pos,
+                        row.ref_allele,
+                        row.alt_allele,
+                        row.samples[0].clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                (32, "A".into(), "G".into(), "1/0:0,5".into()),
+                (
+                    32,
+                    "AA".into(),
+                    "ATATATATATATATATATATA,A".into(),
+                    "2/1:0,9,5".into(),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn deeptrio_repeat_aggregates_keep_the_source_anchor() {
+        // The three other issue #69 windows have the same preprocessing
+        // shape as chr1, with the shorter deletion listed first by legacy.
+        let cases = [
+            (
+                "chr2",
+                b"AAATATATATAAATATATATAAATATATATAAATATATATAAATATATATATAAATATATA".as_slice(),
+                "AA",
+                "AATATATATAAATATATATAAATATATATAAATATATATAAATA,T",
+                "1/2:0,7,3",
+                "T",
+                "1/0:0,3",
+                "A,AATATATATAAATATATATAAATATATATAAATATATATAAATA",
+                "1/2:0,3,7",
+            ),
+            (
+                "chr4",
+                b"AATGTGTGGTAAGGCCCACTAGGATAAGGTAAACACACACACACACACACACACACACACA".as_slice(),
+                "AA",
+                "AACACACACACA,C",
+                "1/2:0,22,14",
+                "C",
+                "1/0:0,14",
+                "A,AACACACACACA",
+                "1/2:0,14,22",
+            ),
+            (
+                "chr10",
+                b"TCGATTACTGTTTCTTAAACTGAACTAATAGGGTGTGTGTGTGTGTGTGTGTGTGTGTGTG".as_slice(),
+                "GG",
+                "GGTGTG,T",
+                "1/2:2,9,9",
+                "T",
+                "1/0:2,9",
+                "G,GGTGTG",
+                "1/2:2,9,9",
+            ),
+        ];
+        for (
+            chrom,
+            reference,
+            ref_allele,
+            alt,
+            sample,
+            snp_alt,
+            snp_sample,
+            indel_alt,
+            indel_sample,
+        ) in cases
+        {
+            let rec = make_record(chrom, 32, ref_allele, alt, "GT:AD", sample);
+            let rows =
+                aggregate_location_records_with_successor(primitive_split(&rec, reference), true)
+                    .into_iter()
+                    .map(|row| {
+                        (
+                            row.pos,
+                            row.ref_allele,
+                            row.alt_allele,
+                            row.samples[0].clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+            assert_eq!(
+                rows,
+                [
+                    (
+                        32,
+                        ref_allele[..1].into(),
+                        snp_alt.into(),
+                        snp_sample.into()
+                    ),
+                    (32, ref_allele.into(), indel_alt.into(), indel_sample.into()),
+                ],
+                "{chrom}"
+            );
+        }
     }
 
     #[test]

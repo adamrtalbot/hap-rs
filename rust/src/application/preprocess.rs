@@ -1084,6 +1084,17 @@ fn process_normalized_record(
     for source in source_records {
         let reverse_hetalt_samples = source.reverse_hetalt_samples;
         let mut source = source.record;
+        let source_alts = source.alt_allele.split(',').collect::<Vec<_>>();
+        let preserve_source_hetalt_order = source_alts.len() == 2
+            && source.samples.len() == 1
+            && decompose
+            && source.ref_allele.len() > 1
+            && source_alts
+                .iter()
+                .any(|alt| alt.len() > source.ref_allele.len())
+            && source_alts
+                .iter()
+                .any(|alt| alt.len() == 1 && !source.ref_allele.starts_with(alt));
         let is_mixed_deletion_merge_partner = mixed_deletion_merge_partners.contains(&(
             source.chrom.clone(),
             source.pos,
@@ -1126,9 +1137,14 @@ fn process_normalized_record(
                 restore_legacy_hetalt_orientation(record, &reverse_hetalt_samples);
             }
         }
-        emitted_groups.push(emitted);
+        let preserve_merged_hetalt_order = preserve_source_hetalt_order
+            && emitted.len() == 2
+            && emitted.iter().any(|record| {
+                record.alt_allele.contains(',') && record.primitive_identity.is_none()
+            });
+        emitted_groups.push((emitted, preserve_merged_hetalt_order));
     }
-    for emitted in emitted_groups {
+    for (emitted, preserve_merged_hetalt_order) in emitted_groups {
         // Only leftshift records that came through primitive_split
         // unchanged. Fanned-out primitives are already canonical.
         let leftshift_eligible = emitted.len() == 1;
@@ -1147,7 +1163,11 @@ fn process_normalized_record(
                     apply_left_shift(&mut split, reference.as_bytes(), leftshift_floor);
                 }
             }
-            canonicalize_multi_allelic_order(&mut split);
+            // The source-level primitive aggregator has assigned legacy's
+            // ALT and GT order; sorting or reversing it here would undo that.
+            if !(preserve_merged_hetalt_order && split.alt_allele.contains(',')) {
+                canonicalize_multi_allelic_order(&mut split);
+            }
             canonicalize_legacy_genotypes(&mut split);
             if split.qual.is_empty() || split.qual == "." {
                 split.qual = "0".to_string();
