@@ -253,21 +253,13 @@ fn path_sequence(
             return None;
         }
         if cursor < edit.start {
-            output.push_str(
-                std::str::from_utf8(
-                    &reference.as_bytes()[(cursor - 1) as usize..(edit.start - 1) as usize],
-                )
-                .ok()?,
-            );
+            output.push_str(reference.get((cursor - 1) as usize..(edit.start - 1) as usize)?);
         }
         output.push_str(&edit.alt);
         cursor = edit.end + 1;
     }
     if cursor <= region_end {
-        output.push_str(
-            std::str::from_utf8(&reference.as_bytes()[(cursor - 1) as usize..region_end as usize])
-                .ok()?,
-        );
+        output.push_str(reference.get((cursor - 1) as usize..region_end as usize)?);
     }
     Some(output.to_ascii_uppercase())
 }
@@ -328,10 +320,9 @@ pub(super) fn signatures(
         }
     }
     let all_hets = next_mask.wrapping_sub(1);
-    let reference_sequence =
-        std::str::from_utf8(&reference.as_bytes()[region_start - 1..region_end])
-            .ok()?
-            .to_ascii_uppercase();
+    let reference_sequence = reference
+        .get(region_start - 1..region_end)?
+        .to_ascii_uppercase();
     let mut queue = VecDeque::from([PathState {
         node: 0,
         color: Color::Grey,
@@ -359,11 +350,8 @@ pub(super) fn signatures(
             };
             if let Some(edit) = &node.edit {
                 next_state.edits.push(edit.clone());
-                let Some(sequence) =
-                    path_sequence(reference, region_start, region_end, &next_state.edits)
-                else {
-                    return None;
-                };
+                let sequence =
+                    path_sequence(reference, region_start, region_end, &next_state.edits)?;
                 if next_state.mask != 0 && next_state.sequences_seen.contains(&sequence) {
                     continue;
                 }
@@ -373,11 +361,8 @@ pub(super) fn signatures(
             }
             if next == sink {
                 if next_state.homs == homs {
-                    let Some(sequence) =
-                        path_sequence(reference, region_start, region_end, &next_state.edits)
-                    else {
-                        return None;
-                    };
+                    let sequence =
+                        path_sequence(reference, region_start, region_end, &next_state.edits)?;
                     paths.push((next_state.mask, sequence));
                     if paths.len() >= max_paths {
                         break;

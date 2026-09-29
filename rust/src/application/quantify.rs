@@ -435,9 +435,8 @@ fn run_with_metric_indices_inner(
         .enumerate()
         .filter_map(|(index, record)| match record {
             Err(error) => Some(Err(error)),
-            Ok(record) => match roc_record(record.raw(), benchmark_samples) {
-                None => None,
-                Some(record_for_roc) => Some(Ok(AnnotatedRow {
+            Ok(record) => roc_record(record.raw(), benchmark_samples).map(|record_for_roc| {
+                Ok(AnnotatedRow {
                     sort_key: SortKey::new(record.raw().chrom.clone(), record.raw().pos, index, 0),
                     record: record_for_roc.into(),
                     query_pass: record.raw().is_pass(),
@@ -446,8 +445,8 @@ fn run_with_metric_indices_inner(
                     }),
                     xcmp_ctype: None,
                     xcmp_hap_match: false,
-                })),
-            },
+                })
+            }),
         });
     let roc_options = roc::RocOptions {
         threads: args.threads.unwrap_or(1).max(1),

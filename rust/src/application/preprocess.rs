@@ -534,7 +534,7 @@ fn run_inner(
                 normalization_enabled,
                 somatic_mode,
                 somatic_sample_names: somatic_sample_names.as_deref(),
-                reference_sequences: &reference_sequences,
+                reference_sequences,
                 regions: regions.as_deref(),
                 targets: targets.as_deref(),
                 locations: locations.as_deref(),
@@ -661,7 +661,7 @@ fn run_inner(
                         continue;
                     }
                 } else if normalization_enabled {
-                    conform_record_reference(&mut record, &reference_sequences)?;
+                    conform_record_reference(&mut record, reference_sequences)?;
                 }
 
                 let converted = if let (Some(mode), Some(sample_names)) =

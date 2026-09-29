@@ -586,7 +586,7 @@ fn run_inner(mut args: SomaticArgs) -> Result<()> {
         let mut caller_ambi_query = Vec::new();
         let mut caller_unk_query = Vec::new();
         for (truth_index, truth_record) in truth_raw_filtered.iter().enumerate() {
-            let Some(label) = raw_type_label(&truth_record) else {
+            let Some(label) = raw_type_label(truth_record) else {
                 continue;
             };
             by_type.entry(label).or_default().truth_total += 1;
@@ -601,13 +601,13 @@ fn run_inner(mut args: SomaticArgs) -> Result<()> {
                         0,
                         render_strelka_hcc_indel_tp_row(
                             0,
-                            &truth_record,
-                            &query_record,
+                            truth_record,
+                            query_record,
                             &query_depths,
                         ),
                     )?;
                 } else if use_generic_feature_table {
-                    feature_rows.push(0, render_generic_tp_row(0, &truth_record, &query_record))?;
+                    feature_rows.push(0, render_generic_tp_row(0, truth_record, query_record))?;
                 } else if use_caller_feature_table {
                     caller_tp_truth.push(truth_record.clone());
                     caller_tp_query.push(query_record.clone());
@@ -615,9 +615,9 @@ fn run_inner(mut args: SomaticArgs) -> Result<()> {
             } else {
                 by_type.entry(label).or_default().fn_count += 1;
                 if use_strelka_hcc_indel {
-                    feature_rows.push(2, render_strelka_hcc_indel_fn_row(0, &truth_record))?;
+                    feature_rows.push(2, render_strelka_hcc_indel_fn_row(0, truth_record))?;
                 } else if use_generic_feature_table {
-                    feature_rows.push(2, render_generic_fn_row(0, &truth_record))?;
+                    feature_rows.push(2, render_generic_fn_row(0, truth_record))?;
                 } else if use_caller_feature_table {
                     caller_fn_truth.push(truth_record.clone());
                 }
@@ -625,7 +625,7 @@ fn run_inner(mut args: SomaticArgs) -> Result<()> {
         }
 
         for (query_index, query_record) in query_raw_filtered.iter().enumerate() {
-            let type_label = raw_type_label(&query_record);
+            let type_label = raw_type_label(query_record);
             if let Some(label) = type_label {
                 by_type.entry(label).or_default().query_total += 1;
             }
@@ -695,14 +695,14 @@ fn run_inner(mut args: SomaticArgs) -> Result<()> {
             if args.feature_table.is_some() {
                 if use_strelka_hcc_indel {
                     let row =
-                        render_strelka_hcc_indel_query_row(0, &query_record, tag, &query_depths);
+                        render_strelka_hcc_indel_query_row(0, query_record, tag, &query_depths);
                     match class {
                         QueryClass::Fp => feature_rows.push(1, row)?,
                         QueryClass::Unk => feature_rows.push(4, row)?,
                         QueryClass::Ambi => feature_rows.push(3, row)?,
                     }
                 } else if use_generic_feature_table {
-                    let row = render_generic_query_row(0, &query_record, tag);
+                    let row = render_generic_query_row(0, query_record, tag);
                     match class {
                         QueryClass::Fp => feature_rows.push(1, row)?,
                         QueryClass::Unk => feature_rows.push(4, row)?,

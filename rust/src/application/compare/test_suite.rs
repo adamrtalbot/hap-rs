@@ -2503,8 +2503,8 @@ mod memory_guards {
 
         let counterpart = query_insert_conflict_has_truth_counterpart(
             &[query_insert, query_deletion],
-            &[truth_insert.clone()],
-            &[truth_insert],
+            std::slice::from_ref(&truth_insert),
+            std::slice::from_ref(&truth_insert),
         );
 
         assert_eq!(counterpart, Some(true));
@@ -2518,8 +2518,8 @@ mod memory_guards {
 
         let counterpart = query_insert_conflict_has_truth_counterpart(
             &[query_insert, query_snp],
-            &[truth_snp.clone()],
-            &[truth_snp],
+            std::slice::from_ref(&truth_snp),
+            std::slice::from_ref(&truth_snp),
         );
 
         assert_eq!(counterpart, Some(false));

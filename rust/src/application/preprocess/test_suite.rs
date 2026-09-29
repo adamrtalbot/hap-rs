@@ -1367,8 +1367,8 @@ mod tests {
             .map(|record| record.pos)
             .collect::<Vec<_>>();
         assert_eq!(positions.len(), 240);
-        for (offset, pair) in positions.chunks_exact(2).enumerate() {
-            assert_eq!(pair, [offset + 1, offset + 1]);
+        for (offset, pair) in positions.as_chunks::<2>().0.iter().enumerate() {
+            assert_eq!(*pair, [offset + 1, offset + 1]);
         }
         Ok(())
     }
