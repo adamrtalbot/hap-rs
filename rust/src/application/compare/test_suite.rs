@@ -62,6 +62,57 @@ mod scratch_tests {
             .join(file)
     }
 
+    #[test]
+    fn chr10_compound_block_keeps_truth_deletion_unmatched() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chr10-compound-block");
+        let root = test_root("chr10-compound-block");
+        let prefix = root.join("result");
+        let mut options = CompareArgs::with_paths(
+            fixture.join("truth.vcf").display().to_string(),
+            fixture.join("query.vcf").display().to_string(),
+            fixture.join("ref.fa").display().to_string(),
+            prefix.display().to_string(),
+        );
+        options.fp_bedfile = Some(fixture.join("confident.bed").display().to_string());
+        options.roc.no_roc = true;
+        options.no_json = true;
+        options.no_write_counts = true;
+        options.scratch_prefix = Some(root.join("scratch").display().to_string());
+        run_args(options).unwrap();
+
+        let summary = fs::read_to_string(suffixed_report_path(&prefix, "summary.csv")).unwrap();
+        for filter in ["ALL", "PASS"] {
+            assert!(
+                summary
+                    .lines()
+                    .any(|line| line.starts_with(&format!("INDEL,{filter},2,0,2,1,1,0,"))),
+                "INDEL {filter} must have TP 0, FN 2, FP 1: {summary}"
+            );
+        }
+        let (_, records) = vcf::load_raw_vcf(&suffixed_report_path(&prefix, "vcf.gz")).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.samples[0].contains(":FN:"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.samples[1].contains(":FP:"))
+                .count(),
+            2
+        );
+        assert!(records.iter().any(|record| {
+            record.ref_allele == "GCACACA"
+                && record.alt_allele == "G,GCACACACACA"
+                && record.samples[1].starts_with("2/1:FP:")
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn test_root(label: &str) -> PathBuf {
         let id = SCRATCH_RUN_ID.fetch_add(1, Ordering::Relaxed);
         let root =
