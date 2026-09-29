@@ -2190,6 +2190,7 @@ mod tests {
         let mut pending = HashMap::new();
         let mut deletion_ends = HashMap::new();
         let mut sets = DeletionSets::default();
+        let mut substitution_ends = HashMap::new();
         for record in records {
             observe_following_spanning_deletions(
                 record,
@@ -2197,7 +2198,11 @@ mod tests {
                 &mut deletion_ends,
                 &mut sets,
             );
+            if record_is_substitution(record) {
+                substitution_ends.insert((record.chrom.clone(), record.pos), record.end_pos());
+            }
         }
+        sets.revert_unsupported_flush_releases(&substitution_ends);
         let DeletionSets {
             following_spanning,
             equal_floor_blocked,
@@ -2274,9 +2279,36 @@ mod tests {
     }
 
     #[test]
+    fn following_deletion_ending_with_the_mixed_one_stays_blocked_without_a_snp() {
+        // HG003 PEPPER chr3:180593810: `TTAAA>T` ends on the last base
+        // `ATTAAA>T` deletes. With no SNP at 101 legacy keeps the two split.
+        let mixed = record_at(100, "ATTAAA", "T");
+        let following = record_at(101, "TTAAA", "T");
+        let mixed_identity = (
+            "chr1".to_string(),
+            100,
+            "ATTAAA".to_string(),
+            "T".to_string(),
+        );
+
+        let (spanning, _, released_following, merge_partners) =
+            observe_anchor_context(&[mixed.clone(), following.clone()]);
+        assert!(spanning.contains(&mixed_identity));
+        assert!(released_following.is_empty());
+        assert!(merge_partners.is_empty());
+
+        // A SNP at the follower's position keeps the release, whichever
+        // order the two same-position records arrive in.
+        let snp = record_at(101, "T", "G");
+        let (spanning, _, released_following, _) = observe_anchor_context(&[mixed, following, snp]);
+        assert!(!spanning.contains(&mixed_identity));
+        assert_eq!(released_following.len(), 1);
+    }
+
+    #[test]
     fn later_longer_follower_does_not_reblock_a_released_mixed_deletion() {
         let mixed = record_at(100, "CTCAACTAG", "T");
-        let shorter_following = record_at(101, "TCAACTAG", "T");
+        let shorter_following = record_at(101, "TCAACTA", "T");
         let longer_following = record_at(101, "TCAACTAGTTAAG", "T");
         let mixed_identity = (
             "chr1".to_string(),

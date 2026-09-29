@@ -711,6 +711,14 @@ fn aggregate_same_position(
     out
 }
 
+/// The value spelled by the largest numeric cell, or `fallback` when none parse.
+fn max_numeric<'a>(values: impl Iterator<Item = &'a str>, fallback: &str) -> String {
+    values
+        .filter_map(|value| value.parse::<f64>().ok().map(|number| (number, value)))
+        .max_by(|left, right| left.0.total_cmp(&right.0))
+        .map_or_else(|| fallback.to_string(), |(_, value)| value.to_string())
+}
+
 fn merge_records(
     sorted: Vec<RawVcfRecord>,
     ad_index: Option<usize>,
@@ -719,6 +727,23 @@ fn merge_records(
     let mut base = sorted[0].clone();
     let alt_list: Vec<String> = sorted.iter().map(|r| r.alt_allele.clone()).collect();
     base.alt_allele = alt_list.join(",");
+    // Legacy keeps the highest QUAL, DP and reference depth across the merged
+    // calls; every other cell comes from the first call (HG003 PEPPER
+    // chr1:11720593 `C>CAA` QUAL 8.9 DP 19 AD 12,0 plus `C>CAAA` QUAL 50.5
+    // DP 25 AD 15,4 -> QUAL 50.5 DP 25 AD 15,0,4 GQ 9).
+    base.qual = max_numeric(sorted.iter().map(|record| record.qual.as_str()), &base.qual);
+    let dp_index = base
+        .format
+        .as_deref()
+        .and_then(|format| format.split(':').position(|key| key == "DP"));
+    let cell = |record: &RawVcfRecord, s: usize, index: usize| {
+        record
+            .samples
+            .get(s)
+            .and_then(|sample| sample.split(':').nth(index))
+            .unwrap_or(".")
+            .to_string()
+    };
 
     // Merge per-sample GT and AD across the alleles. We assume each input
     // record was a single-alt projection (GT=0/1 or 1/1, AD=[ref, this]).
@@ -734,18 +759,34 @@ fn merge_records(
             .map(|c| c.to_string())
             .collect();
 
-        // Combined AD = [ref_depth, alt1_depth, alt2_depth, ...] taking
-        // ref_depth from the first split and per-alt depths from each.
+        if let Some(di) = dp_index {
+            let depths = sorted
+                .iter()
+                .map(|record| cell(record, s, di))
+                .collect::<Vec<_>>();
+            if let Some(target) = cells.get_mut(di) {
+                *target = max_numeric(depths.iter().map(String::as_str), target);
+            }
+        }
+
+        // Combined AD = [ref_depth, alt1_depth, alt2_depth, ...] taking the
+        // highest ref_depth across the splits and per-alt depths from each.
         if let Some(ai) = ad_index {
             let mut ad_parts: Vec<String> = Vec::new();
-            // ref depth from the first record
-            let first_ad = sorted[0]
-                .samples
-                .get(s)
-                .map(|c| c.split(':').nth(ai).unwrap_or(".").to_string())
-                .unwrap_or_default();
-            let first_parts: Vec<&str> = first_ad.split(',').collect();
-            ad_parts.push(first_parts.first().copied().unwrap_or("0").to_string());
+            let ref_depths = sorted
+                .iter()
+                .map(|record| {
+                    cell(record, s, ai)
+                        .split(',')
+                        .next()
+                        .unwrap_or("0")
+                        .to_string()
+                })
+                .collect::<Vec<_>>();
+            ad_parts.push(max_numeric(
+                ref_depths.iter().map(String::as_str),
+                &ref_depths[0],
+            ));
             for rec in &sorted {
                 let ad = rec
                     .samples
@@ -1001,7 +1042,18 @@ fn aggregate_location_records_inner(
     let ordinary_insertion_and_deletion = records.iter().all(|record| !record.mixed_edit_primitive)
         && records.iter().any(is_insertion)
         && records.iter().any(is_deletion);
-    if !preserve_pair_order || ordinary_insertion_and_deletion {
+    // An ordinary deletion keeps its place ahead of an insertion recovered from
+    // a later complex allele (HG003 PEPPER chr8:52884907 `AAG>A` 0/1 then
+    // `A>AG` from `AG>GAGA` 1/0 -> `AAG>A,AGAG` 2/1).
+    let ordinary_deletion_with_mixed_insertion = records
+        .iter()
+        .any(|record| is_deletion(record) && !record.mixed_edit_primitive)
+        && records
+            .iter()
+            .any(|record| is_insertion(record) && record.mixed_edit_primitive);
+    if (!preserve_pair_order || ordinary_insertion_and_deletion)
+        && !ordinary_deletion_with_mixed_insertion
+    {
         records.sort_by(|left, right| {
             mixed_insertion_order(left, right)
                 .then_with(|| {
@@ -1211,6 +1263,21 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].alt_allele, "G");
         assert_eq!(out[0].samples[0], "0/1");
+    }
+
+    #[test]
+    fn location_aggregator_keeps_highest_qual_and_depths() {
+        // Measured against pinned happy-0.3.15: QUAL, DP and the reference
+        // depth each take the maximum; GQ stays with the first call.
+        let mut insertion = make_record("c", 11, "A", "AC", "GT:GQ:DP:AD", "0/1:40:10:3,5");
+        insertion.qual = "60".into();
+        let mut deletion = make_record("c", 11, "AC", "A", "GT:GQ:DP:AD", "0/1:15:30:8,2");
+        deletion.qual = "20".into();
+        let out = aggregate_location_records(vec![insertion, deletion]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].alt_allele, "ACC,A");
+        assert_eq!(out[0].qual, "60");
+        assert_eq!(out[0].samples[0], "2/1:40:30:8,5,2");
     }
 
     #[test]

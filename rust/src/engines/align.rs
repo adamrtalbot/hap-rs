@@ -212,10 +212,10 @@ fn needleman_wunsch(ref_allele: &[u8], alt_allele: &[u8]) -> Vec<Op> {
     }
 
     // Start in the highest-scoring layer at the corner. On a tie prefer a gap
-    // layer (Insert, then Delete) over Match so a trailing gap right-aligns.
+    // layer (Delete, then Insert) over Match so a trailing gap right-aligns.
     let (mut layer, _) = [
-        (Layer::Insert, e[m][n]),
         (Layer::Delete, f[m][n]),
+        (Layer::Insert, e[m][n]),
         (Layer::Match, h[m][n]),
     ]
     .into_iter()
@@ -498,6 +498,21 @@ mod tests {
         assert_eq!(
             (primitives[1].start, primitives[1].end),
             (78_142_362, 78_142_362)
+        );
+    }
+
+    #[test]
+    fn affine_ends_a_rotation_on_the_deletion() {
+        // HG003 PEPPER chr11:104119059. `ATA>TAT` scores the same as insert-T
+        // then delete-A or the reverse; legacy emits the insertion first.
+        let primitives = realign_ref_var(104_119_059, b"ATA", b"TAT");
+        assert_eq!(primitives.len(), 2, "{primitives:?}");
+        assert_eq!(primitives[0].alt, "T");
+        assert_eq!(primitives[0].end + 1, primitives[0].start);
+        assert!(primitives[1].alt.is_empty());
+        assert_eq!(
+            (primitives[1].start, primitives[1].end),
+            (104_119_061, 104_119_061)
         );
     }
 

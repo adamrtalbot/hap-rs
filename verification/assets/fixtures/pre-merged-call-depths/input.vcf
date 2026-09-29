@@ -1,0 +1,15 @@
+##fileformat=VCFv4.2
+##contig=<ID=chrA,length=50>
+##contig=<ID=chrB,length=46>
+##FILTER=<ID=PASS,Description="All filters passed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+##FORMAT=<ID=VAF,Number=A,Type=Float,Description="Variant allele fraction">
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred-scaled likelihoods">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
+chrA	23	.	C	CAA	8.9	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:9:19:12,0:0:8,0,50
+chrA	23	.	C	CAAA	50.5	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:37:25:15,4:0.16:50,0,37
+chrB	11	.	A	AC	60	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:40:10:3,5:0.5:60,0,40
+chrB	11	.	AC	A	20	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:15:30:8,2:0.07:20,0,15

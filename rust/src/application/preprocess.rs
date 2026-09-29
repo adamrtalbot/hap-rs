@@ -115,6 +115,33 @@ struct DeletionSets {
     released_mixed: HashSet<RecordIdentity>,
     released_following: HashSet<RecordIdentity>,
     mixed_deletion_merge_partners: HashSet<RecordIdentity>,
+    /// Released `(following, mixed)` pairs whose deletions end on the same
+    /// base; kept only when a substitution shares the following position.
+    flush_releases: Vec<(RecordIdentity, RecordIdentity)>,
+}
+
+impl DeletionSets {
+    /// A following deletion ending on the mixed deletion's last base merges
+    /// with it only beside a substitution at its own position (HG001
+    /// chr19:43502998 `G>C`). Without one the two stay split (HG003 PEPPER
+    /// chr3:180593810 `ATTAAA>T` beside `TTAAA>T`, chr7:89467572 `TGT>A`
+    /// beside `GT>G`). Resolved after the pre-scan so input order is moot.
+    fn revert_unsupported_flush_releases(
+        &mut self,
+        substitution_end_by_position: &HashMap<(String, usize), usize>,
+    ) {
+        for (following, mixed) in std::mem::take(&mut self.flush_releases) {
+            if substitution_end_by_position.contains_key(&(following.0.clone(), following.1)) {
+                continue;
+            }
+            self.released_following.remove(&following);
+            if !self.equal_floor_blocked.contains(&mixed) {
+                self.mixed_deletion_merge_partners.remove(&following);
+            }
+            self.released_mixed.remove(&mixed);
+            self.following_spanning.insert(mixed);
+        }
+    }
 }
 
 /// Per-chromosome left-shift state carried across records during normalization.
@@ -143,6 +170,7 @@ struct ShiftFloors {
     barrier: usize,
     group_pos: usize,
     pending: usize,
+    group_prev_end: usize,
 }
 
 /// A pure insertion extends the REF prefix on every ALT — it adds bases without
@@ -197,6 +225,7 @@ fn observe_following_spanning_deletions(
         released_mixed: released_mixed_deletions,
         released_following: released_following_deletions,
         mixed_deletion_merge_partners,
+        flush_releases,
     } = sets;
     if let Some(previous_position) = record.pos.checked_sub(1)
         && let Some(candidates) =
@@ -229,6 +258,9 @@ fn observe_following_spanning_deletions(
                     record.ref_allele.clone(),
                     record.alt_allele.clone(),
                 );
+                if record.ref_allele.len() == *mixed_deleted_length {
+                    flush_releases.push((following_identity.clone(), candidate.clone()));
+                }
                 released_following_deletions.insert(following_identity.clone());
                 mixed_deletion_merge_partners.insert(following_identity);
             } else if equal_floor_blocked_deletions.contains(candidate)
@@ -470,6 +502,7 @@ fn run_inner(
             observe_gender(record.raw(), &mut haploid_x, &mut diploid_x);
         }
     }
+    deletion_sets.revert_unsupported_flush_releases(&substitution_end_by_position);
     report_phase("input_header_inspection", phase_started);
     let requested_fixchr = if args.no_fixchr {
         Some(false)
@@ -983,8 +1016,9 @@ fn process_normalized_record(
         floors.barrier = floors.barrier.max(floors.pending);
         floors.group_pos = record_pos;
         floors.pending = 0;
+        floors.group_prev_end = floors.prev_end;
     }
-    let prev_end = floors.prev_end;
+    let prev_end = floors.group_prev_end;
     // A substitution at this position floors a shifting record here (a SNP
     // blocks a colocated deletion). Substitutions do not left-shift themselves,
     // so they don't consult it. The lookup is pre-scanned, so it is independent
@@ -1020,8 +1054,8 @@ fn process_normalized_record(
     // `C>T,G` drops an allele). Legacy splits regardless of sample count; the
     // upgrade path is a multi-sample-correct aggregator re-merge, after which
     // this `samples.len() == 1` guard can drop.
-    let is_multi_allelic = record.alt_allele.contains(',')
-        && !record.alt_allele.split(',').any(is_symbolic_allele);
+    let is_multi_allelic =
+        record.alt_allele.contains(',') && !record.alt_allele.split(',').any(is_symbolic_allele);
     let split_multi_allelic = is_multi_allelic
         && record.samples.len() == 1
         && (!decompose || !variant_pipeline::record_needs_primitive_split(&record));
