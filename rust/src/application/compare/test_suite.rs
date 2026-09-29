@@ -2651,6 +2651,31 @@ mod memory_guards {
     }
 
     #[test]
+    fn outside_conf_two_copy_query_indel_with_neighbor_stays_unpaired() {
+        let truth_indel = variant(102, "A", "AT", "1/0");
+        let query_indel = variant(102, "A", "AT,AT", "2/1");
+        let query_snp = variant(102, "A", "G", "1/0");
+        let cluster = Cluster {
+            chrom: "chr21".to_string(),
+            start: 102,
+            end: 102,
+            truth: vec![truth_indel.clone()],
+            query: vec![query_indel.clone(), query_snp],
+        };
+
+        assert!(outside_conf_two_copy_indel_with_neighbor(
+            &cluster,
+            &truth_indel,
+            &query_indel
+        ));
+        assert!(!outside_conf_two_copy_indel_with_neighbor(
+            &cluster,
+            &truth_indel,
+            &variant(102, "A", "AT", "0/1")
+        ));
+    }
+
+    #[test]
     fn halfcall_inherits_same_position_truth_local_mismatch_kind() {
         let reference = "A".repeat(256);
         let halfcall = variant(102, "A", ".", "0|.");

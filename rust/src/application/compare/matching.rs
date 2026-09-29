@@ -3166,6 +3166,9 @@ pub(super) fn mark_cluster_match(
             }
             if query_matches_truth_allele_set(query, truth)
                 && selected_alt_sequences(truth) != selected_alt_sequences(query)
+                && !(!region_state.truth_is_conf(truth)
+                    && !region_state.query_is_conf(query)
+                    && outside_conf_two_copy_indel_with_neighbor(full_cluster, truth, query))
                 && !query_primitive_splits(
                     truth,
                     reference,
@@ -3447,6 +3450,9 @@ pub(super) fn mark_cluster_mismatch(
             if query_matches_truth_allele_set(query, truth)
                 && selected_alt_sequences(truth) != selected_alt_sequences(query)
                 && !mixed_type_same_locus_keeps_indel_rows_separate(cluster, truth, query)
+                && !(!region_state.truth_is_conf(truth)
+                    && !region_state.query_is_conf(query)
+                    && outside_conf_two_copy_indel_with_neighbor(full_cluster, truth, query))
             {
                 pairs.push((ti, qi));
                 paired_truth.insert(ti);
@@ -3739,6 +3745,34 @@ pub(super) fn mixed_type_same_locus_keeps_indel_rows_separate(
                     && selected_alt_sequences(snp_truth) != selected_alt_sequences(snp_query)
             })
     })
+}
+
+pub(super) fn outside_conf_two_copy_indel_with_neighbor(
+    cluster: &Cluster,
+    truth: &Variant,
+    query: &Variant,
+) -> bool {
+    if truth.primary_type() != "INDEL" || query.primary_type() != "INDEL" {
+        return false;
+    }
+    // A two-copy query indel can be an aggregate of two source edits at this
+    // anchor (including a repeated-ALT `2/1` record projected as `1/1`).
+    // When another GT-selected query record shares the anchor,
+    // legacy keeps the het truth indel and two-copy query indel on separate
+    // rows, even when the other record was already matched and removed from
+    // the remainder (HG003 DeepTrio chr12:99121321).
+    let truth_alleles = parse_gt_alleles(&truth.gt);
+    let truth_selected = selected_alt_sequences(truth);
+    let query_selected = selected_alt_sequences(query);
+    truth_alleles.contains(&0)
+        && truth_selected.len() == 1
+        && query_selected.len() == 2
+        && query_selected[0] == query_selected[1]
+        && cluster.query.iter().any(|neighbor| {
+            neighbor.key.pos == query.key.pos
+                && neighbor.key != query.key
+                && !selected_alt_sequences(neighbor).is_empty()
+        })
 }
 
 /// Map the per-row `BK` (block kind) tag to the FP classification used by
