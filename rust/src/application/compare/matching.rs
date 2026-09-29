@@ -3171,6 +3171,14 @@ pub(super) fn mark_cluster_match(
             }
             if query_matches_truth_allele_set(query, truth)
                 && selected_alt_sequences(truth) != selected_alt_sequences(query)
+                // The same-anchor query SNP may already have been consumed by
+                // exact_match_pairs. It still prevents the duplicate insertion
+                // aggregate from becoming a combined TP row: legacy emits
+                // separate truth and query TP rows for this hap-match shape.
+                && !query_duplicate_alt_aggregate_has_conflicting_neighbor(
+                    query,
+                    &full_cluster.query,
+                )
                 && !query_primitive_splits(
                     truth,
                     reference,
@@ -3452,6 +3460,12 @@ pub(super) fn mark_cluster_mismatch(
             if query_matches_truth_allele_set(query, truth)
                 && selected_alt_sequences(truth) != selected_alt_sequences(query)
                 && !mixed_type_same_locus_keeps_indel_rows_separate(cluster, truth, query)
+                // The duplicate insertion is not an allele-only genotype
+                // mismatch when another query edit shares its anchor. One
+                // haplotype carries that edit as well, so legacy leaves the
+                // truth and query insertion on separate lm rows.
+                && !(query.key.alt_allele.split(',').all(|alt| alt.len() > query.key.ref_allele.len())
+                    && query_duplicate_alt_aggregate_has_conflicting_neighbor(query, &full_cluster.query))
             {
                 pairs.push((ti, qi));
                 paired_truth.insert(ti);
