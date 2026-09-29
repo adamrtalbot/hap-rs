@@ -8,6 +8,8 @@
 process HAPPY_LEGACY {
     tag { "${meta.id}" }
     publishDir { "${params.outdir}/happy/${meta.id}/legacy" }, mode: 'copy', pattern: 'result*'
+    errorStrategy { task.exitStatus == 42 ? 'retry' : 'finish' }
+    maxRetries 2
 
     input:
     tuple val(meta), path(truth_vcf, stageAs: 'truth/*'), path(truth_indexes, stageAs: 'truth/*'), path(query_vcf, stageAs: 'query/*'), path(query_indexes, stageAs: 'query/*'), path(reference), path(reference_indexes), path(fp_bed), path(fp_indexes), path(stratification_files, stageAs: 'stratification/*'), path(reference_sdf, stageAs: 'vcfeval-sdf/*'), val(args)
@@ -28,6 +30,27 @@ process HAPPY_LEGACY {
         --threads ${task.cpus ?: 1} \\
         --false-positives ${fp_bed} \\
         -o result
+
+    # The pinned xcmp image can occasionally emit a malformed ROC row while
+    # exiting zero. Reject only that artifact shape so Nextflow retries the
+    # unchanged reference command; the parity comparator still checks all
+    # product contents.
+    python - <<'PY'
+    import csv
+    import gzip
+    import os
+    import sys
+
+    path = 'result.roc.all.csv.gz'
+    if os.path.exists(path):
+        with gzip.open(path, 'rb') as handle:
+            rows = csv.reader(handle)
+            next(rows, None)
+            for line_number, row in enumerate(rows, 2):
+                if not row or row[0] not in ('SNP', 'INDEL'):
+                    sys.stderr.write('Malformed pinned legacy ROC row %d' % line_number)
+                    sys.exit(42)
+    PY
 
     """
 }
