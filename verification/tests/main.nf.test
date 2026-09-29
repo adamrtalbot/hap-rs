@@ -14,7 +14,7 @@ nextflow_pipeline {
 
         then {
             def expectedCounts = [
-                happy: 39,
+                happy: 41,
                 sompy: 27,
                 prepy: 62,
                 ftxpy: 25,

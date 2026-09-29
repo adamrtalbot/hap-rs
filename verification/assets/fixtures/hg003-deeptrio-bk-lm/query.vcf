@@ -1,0 +1,6 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr20,length=401>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	HG003
+chr20	197	.	C	CCAA	22.6	PASS	.	GT	1/0
+chr20	197	.	C	TCA	22.6	PASS	.	GT	0/1

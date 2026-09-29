@@ -2214,6 +2214,57 @@ mod memory_guards {
     }
 
     #[test]
+    fn matched_multiallelic_conflict_suppresses_another_local_mismatch() {
+        // Pinned hap.py 0.3.15 emits BK=. on the unmatched SNP at 102 even
+        // though the multi-allelic Insert+Subst at 100 exact-matches. The
+        // block-level hapfail verdict carries across the two anchors.
+        let cluster = Cluster {
+            chrom: "chr21".to_string(),
+            start: 100,
+            end: 102,
+            truth: vec![
+                variant(100, "T", "TT,TTT", "1/2"),
+                variant(100, "T", "G", "0/1"),
+                variant(102, "T", "TA", "0/1"),
+            ],
+            query: vec![
+                variant(100, "T", "TT,TTT", "1/2"),
+                variant(100, "T", "G", "0/1"),
+                variant(102, "T", "TA", "0/1"),
+                variant(102, "T", "G", "0/1"),
+            ],
+        };
+        let reference = BTreeMap::from([("chr21".to_string(), "T".repeat(256))]);
+        let mut counts = BTreeMap::new();
+        let mut subtype_counts = BTreeMap::new();
+        let mut rows = Vec::new();
+        process_cluster(
+            &cluster,
+            &reference,
+            None,
+            ComparisonConfig {
+                no_hc: false,
+                max_enum: 100_000,
+                hb_expand: 0,
+            },
+            &mut counts,
+            &mut subtype_counts,
+            &mut rows,
+        )
+        .unwrap();
+
+        let at_102 = rows
+            .iter()
+            .map(|row| row.record.raw().to_line())
+            .filter(|line| line.split('\t').nth(1) == Some("102"))
+            .collect::<Vec<_>>();
+        assert!(
+            at_102.iter().any(|line| line.contains(":FP:.")),
+            "unmatched query SNP must keep BK=.: {at_102:?}"
+        );
+    }
+
+    #[test]
     fn homalt_insertion_vs_compound_het_query_does_not_drain_as_tp() {
         // chr1:150042104 (HG003 DeepVariant), reduced onto the real microsat
         // reference slice that drives the decomposition. Truth is a homozygous

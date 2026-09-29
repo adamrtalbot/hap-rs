@@ -626,10 +626,10 @@ pub(super) fn process_cluster(
     // this via a compound-het insertion pair (truth split, query merged into a
     // hetalt) sitting one anchor away from an already-matched Insert+Subst
     // pair; without this gate those leftover FN/FP rows lost their BK=lm.
+    let (insert_positions, subst_positions) = insert_subst_positions(&cluster.query);
     let conflict_positions_still_unmatched = {
         let query_remaining_positions: BTreeSet<usize> =
             query_remaining.iter().map(|v| v.key.pos).collect();
-        let (insert_positions, subst_positions) = insert_subst_positions(&cluster.query);
         insert_positions
             .intersection(&subst_positions)
             .any(|pos| query_remaining_positions.contains(pos))
@@ -638,18 +638,23 @@ pub(super) fn process_cluster(
         && query_sig.is_some()
         && matches!(insert_conflict_counterpart, Some(true))
         && conflict_positions_still_unmatched
-        && cluster.query.iter().any(|variant| {
-            // The hapfail shape needs a genuine hetalt insertion aggregate
-            // (two DISTINCT alts, e.g. `TTGG,TTGGG`). A duplicate-alt
-            // aggregate (`ACCCT,ACCCT`) is a persisted HOMOZYGOUS insertion,
-            // not a reciprocal het pair; legacy still reaches hap:mismatch on
-            // those blocks (chr1:150042104 HG003 → BK=lm), so exclude them.
-            let alts: Vec<&str> = variant.key.alt_allele.split(',').collect();
-            let distinct: BTreeSet<&str> = alts.iter().copied().collect();
+        && cluster.query.iter().any(|query| {
+            // Legacy hapfails when the live Insert+Subst conflict is anchored
+            // by the same multi-allelic insertion on both sides. A shared
+            // single insertion beside another query aggregate still reaches
+            // hap:mismatch (HG003 PEPPER and DeepTrio in issue #70).
+            let distinct: BTreeSet<&str> = query.key.alt_allele.split(',').collect();
             distinct.len() >= 2
                 && distinct
                     .iter()
-                    .any(|alt| alt.len() > variant.key.ref_allele.len())
+                    .any(|alt| alt.len() > query.key.ref_allele.len())
+                && insert_positions.contains(&query.key.pos)
+                && subst_positions.contains(&query.key.pos)
+                && cluster.truth.iter().any(|truth| {
+                    truth.key.pos == query.key.pos
+                        && truth.key.ref_allele == query.key.ref_allele
+                        && truth.key.alt_allele.split(',').collect::<BTreeSet<_>>() == distinct
+                })
         });
     let covered_multi_conflict_mismatch = graph_failed
         && truth_remaining.is_empty()
