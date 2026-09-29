@@ -2288,12 +2288,10 @@ mod memory_guards {
             truth: vec![make("CA", "1/0"), make("CCA", "0/1")],
             query: vec![make("G", "1/0"), make("CCA,CCA", "2/1")],
         };
-        let reference = include_str!(
-            "../../../../verification/assets/fixtures/deeptrio-shared-indel-conflict/ref.fa"
-        )
-        .lines()
-        .skip(1)
-        .collect::<String>();
+        // The row pairing depends on the same-anchor edits, not the flanking
+        // sequence. Keep this unit test self-contained in the packaged crate;
+        // the parity fixture retains the real GRCh38 reference slice.
+        let reference = format!("{}C{}", "A".repeat(249), "A".repeat(250));
         let references = BTreeMap::from([("chr1".to_string(), reference)]);
         let mut counts = BTreeMap::new();
         let mut subtype_counts = BTreeMap::new();
