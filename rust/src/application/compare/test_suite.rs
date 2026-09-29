@@ -63,73 +63,53 @@ mod scratch_tests {
     }
 
     #[test]
-    fn deeptrio_duplicate_insertion_keeps_separate_tp_rows() {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("verification/assets/fixtures/deeptrio-separate-tp-rows");
-        let root = test_root("deeptrio-separate-tp-rows");
+    fn chr10_compound_block_keeps_truth_deletion_unmatched() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chr10-compound-block");
+        let root = test_root("chr10-compound-block");
+        let prefix = root.join("result");
         let mut options = CompareArgs::with_paths(
             fixture.join("truth.vcf").display().to_string(),
             fixture.join("query.vcf").display().to_string(),
             fixture.join("ref.fa").display().to_string(),
-            root.join("result").display().to_string(),
+            prefix.display().to_string(),
         );
         options.fp_bedfile = Some(fixture.join("confident.bed").display().to_string());
+        options.roc.no_roc = true;
+        options.no_json = true;
+        options.no_write_counts = true;
         options.scratch_prefix = Some(root.join("scratch").display().to_string());
         run_args(options).unwrap();
 
-        let (_, records) = vcf::load_raw_vcf(&root.join("result.vcf.gz")).unwrap();
-        let rows: Vec<_> = records
-            .iter()
-            .map(|record| {
-                (
-                    record.pos,
-                    record.ref_allele.as_str(),
-                    record.alt_allele.as_str(),
-                    record.samples[0].split(':').take(6).collect::<Vec<_>>(),
-                    record.samples[1].split(':').take(6).collect::<Vec<_>>(),
-                )
-            })
-            .collect();
+        let summary = fs::read_to_string(suffixed_report_path(&prefix, "summary.csv")).unwrap();
+        for filter in ["ALL", "PASS"] {
+            assert!(
+                summary
+                    .lines()
+                    .any(|line| line.starts_with(&format!("INDEL,{filter},2,0,2,1,1,0,"))),
+                "INDEL {filter} must have TP 0, FN 2, FP 1: {summary}"
+            );
+        }
+        let (_, records) = vcf::load_raw_vcf(&suffixed_report_path(&prefix, "vcf.gz")).unwrap();
         assert_eq!(
-            rows,
-            vec![
-                (
-                    97,
-                    "G",
-                    "GT",
-                    vec!["0/1", "TP", "gm", "i1_5", "INDEL", "het"],
-                    vec!["./.", ".", ".", ".", "NOCALL", "nocall"]
-                ),
-                (
-                    104,
-                    "G",
-                    "T",
-                    vec!["0/1", "TP", "gm", "tv", "SNP", "het"],
-                    vec!["1/0", "TP", "gm", "tv", "SNP", "het"]
-                ),
-                (
-                    104,
-                    "G",
-                    "GT",
-                    vec!["1/0", "TP", "gm", "i1_5", "INDEL", "het"],
-                    vec!["./.", ".", ".", ".", "NOCALL", "nocall"]
-                ),
-                (
-                    104,
-                    "G",
-                    "GT",
-                    vec!["./.", ".", ".", ".", "NOCALL", "nocall"],
-                    vec!["1/1", "TP", "gm", "i1_5", "INDEL", "homalt"]
-                ),
-            ]
+            records
+                .iter()
+                .filter(|record| record.samples[0].contains(":FN:"))
+                .count(),
+            2
         );
-        let summary = fs::read_to_string(root.join("result.summary.csv")).unwrap();
-        assert!(
-            summary
-                .lines()
-                .any(|line| line.contains("INDEL,PASS,2,2,0,1,0,0")),
-            "{summary}"
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.samples[1].contains(":FP:"))
+                .count(),
+            2
         );
+        assert!(records.iter().any(|record| {
+            record.ref_allele == "GCACACA"
+                && record.alt_allele == "G,GCACACACACA"
+                && record.samples[1].starts_with("2/1:FP:")
+        }));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2344,6 +2324,78 @@ mod memory_guards {
     }
 
     #[test]
+    fn deeptrio_shared_insertion_with_query_substitution_stays_separate() {
+        // HG003 DeepTrio chr1:218925705, remapped to chr1:250. These are the
+        // identical records handed to comparison by both implementations.
+        let make = |alt: &str, gt: &str| {
+            let mut record = variant(250, "C", alt, gt);
+            record.key.chrom = "chr1".to_string();
+            record
+        };
+        let cluster = Cluster {
+            chrom: "chr1".to_string(),
+            start: 250,
+            end: 250,
+            truth: vec![make("CA", "1/0"), make("CCA", "0/1")],
+            query: vec![make("G", "1/0"), make("CCA,CCA", "2/1")],
+        };
+        // The row pairing depends on the same-anchor edits, not the flanking
+        // sequence. Keep this unit test self-contained in the packaged crate;
+        // the parity fixture retains the real GRCh38 reference slice.
+        let reference = format!("{}C{}", "A".repeat(249), "A".repeat(250));
+        let references = BTreeMap::from([("chr1".to_string(), reference)]);
+        let mut counts = BTreeMap::new();
+        let mut subtype_counts = BTreeMap::new();
+        let mut rows = Vec::new();
+        process_cluster(
+            &cluster,
+            &references,
+            None,
+            ComparisonConfig {
+                no_hc: false,
+                max_enum: 100_000,
+                hb_expand: 0,
+            },
+            &mut counts,
+            &mut subtype_counts,
+            &mut rows,
+        )
+        .unwrap();
+        let observed = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.record.alt_allele.as_str(),
+                    row.record.samples[0].as_str(),
+                    row.record.samples[1].as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(observed.len(), 4, "rows={observed:?}");
+        assert!(
+            observed.iter().any(|(alt, truth, query)| {
+                *alt == "CCA"
+                    && truth.contains(":FN:lm:i1_5:INDEL:het:")
+                    && query.contains(":NOCALL:nocall:")
+            }),
+            "rows={observed:?}"
+        );
+        assert!(
+            observed.iter().any(|(alt, truth, query)| {
+                *alt == "CCA"
+                    && truth.contains(":NOCALL:nocall:")
+                    && query.contains(":FP:lm:i1_5:INDEL:homalt:")
+            }),
+            "rows={observed:?}"
+        );
+        assert!(
+            !observed
+                .iter()
+                .any(|(_, truth, query)| truth.contains(":FN:am:") && query.contains(":FP:am:"))
+        );
+    }
+
+    #[test]
     fn duplicate_alt_deletion_aggregate_splits_into_am_pair_and_lm_copy() {
         // chr6:91567856 (HG003 DeepVariant), rebased onto the real TC-microsat
         // reference slice (91567800-91568050). Truth is a homozygous deletion
@@ -2574,8 +2626,8 @@ mod memory_guards {
 
         let counterpart = query_insert_conflict_has_truth_counterpart(
             &[query_insert, query_deletion],
-            &[truth_insert.clone()],
-            &[truth_insert],
+            std::slice::from_ref(&truth_insert),
+            std::slice::from_ref(&truth_insert),
         );
 
         assert_eq!(counterpart, Some(true));
@@ -2589,8 +2641,8 @@ mod memory_guards {
 
         let counterpart = query_insert_conflict_has_truth_counterpart(
             &[query_insert, query_snp],
-            &[truth_snp.clone()],
-            &[truth_snp],
+            std::slice::from_ref(&truth_snp),
+            std::slice::from_ref(&truth_snp),
         );
 
         assert_eq!(counterpart, Some(false));

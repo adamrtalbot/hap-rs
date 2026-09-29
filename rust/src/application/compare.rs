@@ -862,9 +862,7 @@ fn run_inner(
             .map(vcf::LocationFilter::Contig)
             .collect::<Vec<_>>()
     });
-    let comparison_locations = locations
-        .as_deref()
-        .or_else(|| derived_locations.as_deref());
+    let comparison_locations = locations.as_deref().or(derived_locations.as_deref());
 
     let cluster_gap = match args.engine.engine {
         CompareEngine::ScmpSomatic => 0,
