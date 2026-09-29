@@ -3178,6 +3178,14 @@ pub(super) fn mark_cluster_match(
             }
             if query_matches_truth_allele_set(query, truth)
                 && selected_alt_sequences(truth) != selected_alt_sequences(query)
+                // The same-anchor query SNP may already have been consumed by
+                // exact_match_pairs. It still prevents the duplicate insertion
+                // aggregate from becoming a combined TP row: legacy emits
+                // separate truth and query TP rows for this hap-match shape.
+                && !query_duplicate_alt_aggregate_has_conflicting_neighbor(
+                    query,
+                    &full_cluster.query,
+                )
                 && !query_primitive_splits(
                     truth,
                     reference,
