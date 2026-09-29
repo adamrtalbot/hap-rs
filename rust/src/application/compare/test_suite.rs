@@ -2063,7 +2063,7 @@ mod memory_guards {
     }
 
     #[test]
-    fn spanning_deletion_halfcall_uses_anchor_for_confidence() {
+    fn spanning_deletion_halfcall_inside_confidence_is_confident() {
         let halfcall = variant(100, "ACGT", ".", "0|.");
         let conf = [Interval {
             chrom: "chr21".to_string(),
@@ -2071,6 +2071,41 @@ mod memory_guards {
             end: 100,
         }];
         assert!(variant_is_conf(&halfcall, "N", 100, 103, &conf));
+    }
+
+    #[test]
+    fn chr6_halfcalls_reaching_confidence_are_confident() {
+        for (pos, reference, conf_start) in [
+            (31140630, "CATATAT", 31140634),
+            (32423359, "ATATATATATATATATATATATATATAT", 32423364),
+        ] {
+            let mut halfcall = variant(pos, reference, ".", "0/.");
+            halfcall.key.chrom = "chr6".to_string();
+            let confidence = [Interval {
+                chrom: "chr6".to_string(),
+                start: conf_start,
+                end: conf_start + 50,
+            }];
+            assert!(variant_is_conf(
+                &halfcall,
+                "N",
+                pos,
+                halfcall.end_pos(),
+                &confidence,
+            ));
+            let outside = [Interval {
+                chrom: "chr6".to_string(),
+                start: halfcall.end_pos(),
+                end: halfcall.end_pos() + 50,
+            }];
+            assert!(!variant_is_conf(
+                &halfcall,
+                "N",
+                pos,
+                halfcall.end_pos(),
+                &outside,
+            ));
+        }
     }
 
     #[test]
@@ -2086,15 +2121,19 @@ mod memory_guards {
         };
         assert!(!halfcall_is_covered_by_matched_deletion(
             &cluster.truth[1],
-            &cluster
+            &cluster,
+            false,
         ));
         cluster.query.push(variant(103, "T", "TA,TAA", "2/1"));
         assert!(halfcall_is_covered_by_matched_deletion(
             &cluster.truth[1],
-            &cluster
+            &cluster,
+            false,
         ));
         let outside = variant(104, "T", ".", "0|.");
-        assert!(!halfcall_is_covered_by_matched_deletion(&outside, &cluster));
+        assert!(!halfcall_is_covered_by_matched_deletion(
+            &outside, &cluster, false
+        ));
     }
 
     #[test]
@@ -2109,7 +2148,9 @@ mod memory_guards {
             query: vec![variant(102, "G", "T", "1/1")],
         };
 
-        assert!(halfcall_is_covered_by_matched_deletion(&halfcall, &cluster));
+        assert!(halfcall_is_covered_by_matched_deletion(
+            &halfcall, &cluster, false
+        ));
     }
 
     #[test]
