@@ -2324,6 +2324,78 @@ mod memory_guards {
     }
 
     #[test]
+    fn deeptrio_shared_insertion_with_query_substitution_stays_separate() {
+        // HG003 DeepTrio chr1:218925705, remapped to chr1:250. These are the
+        // identical records handed to comparison by both implementations.
+        let make = |alt: &str, gt: &str| {
+            let mut record = variant(250, "C", alt, gt);
+            record.key.chrom = "chr1".to_string();
+            record
+        };
+        let cluster = Cluster {
+            chrom: "chr1".to_string(),
+            start: 250,
+            end: 250,
+            truth: vec![make("CA", "1/0"), make("CCA", "0/1")],
+            query: vec![make("G", "1/0"), make("CCA,CCA", "2/1")],
+        };
+        // The row pairing depends on the same-anchor edits, not the flanking
+        // sequence. Keep this unit test self-contained in the packaged crate;
+        // the parity fixture retains the real GRCh38 reference slice.
+        let reference = format!("{}C{}", "A".repeat(249), "A".repeat(250));
+        let references = BTreeMap::from([("chr1".to_string(), reference)]);
+        let mut counts = BTreeMap::new();
+        let mut subtype_counts = BTreeMap::new();
+        let mut rows = Vec::new();
+        process_cluster(
+            &cluster,
+            &references,
+            None,
+            ComparisonConfig {
+                no_hc: false,
+                max_enum: 100_000,
+                hb_expand: 0,
+            },
+            &mut counts,
+            &mut subtype_counts,
+            &mut rows,
+        )
+        .unwrap();
+        let observed = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.record.alt_allele.as_str(),
+                    row.record.samples[0].as_str(),
+                    row.record.samples[1].as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(observed.len(), 4, "rows={observed:?}");
+        assert!(
+            observed.iter().any(|(alt, truth, query)| {
+                *alt == "CCA"
+                    && truth.contains(":FN:lm:i1_5:INDEL:het:")
+                    && query.contains(":NOCALL:nocall:")
+            }),
+            "rows={observed:?}"
+        );
+        assert!(
+            observed.iter().any(|(alt, truth, query)| {
+                *alt == "CCA"
+                    && truth.contains(":NOCALL:nocall:")
+                    && query.contains(":FP:lm:i1_5:INDEL:homalt:")
+            }),
+            "rows={observed:?}"
+        );
+        assert!(
+            !observed
+                .iter()
+                .any(|(_, truth, query)| truth.contains(":FN:am:") && query.contains(":FP:am:"))
+        );
+    }
+
+    #[test]
     fn duplicate_alt_deletion_aggregate_splits_into_am_pair_and_lm_copy() {
         // chr6:91567856 (HG003 DeepVariant), rebased onto the real TC-microsat
         // reference slice (91567800-91568050). Truth is a homozygous deletion
