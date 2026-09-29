@@ -984,19 +984,19 @@ fn legacy_string_hash(value: &str) -> u64 {
     const SHIFT: u32 = 47;
     let bytes = value.as_bytes();
     let mut hash = 0xc70f_6907_u64 ^ (bytes.len() as u64).wrapping_mul(MULTIPLIER);
-    let mut chunks = bytes.chunks_exact(8);
-    for chunk in &mut chunks {
-        let mut key = u64::from_le_bytes(chunk.try_into().expect("eight-byte hash chunk"));
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for chunk in chunks {
+        let mut key = u64::from_le_bytes(*chunk);
         key = key.wrapping_mul(MULTIPLIER);
         key ^= key >> SHIFT;
         key = key.wrapping_mul(MULTIPLIER);
         hash ^= key;
         hash = hash.wrapping_mul(MULTIPLIER);
     }
-    for (index, byte) in chunks.remainder().iter().enumerate() {
+    for (index, byte) in remainder.iter().enumerate() {
         hash ^= u64::from(*byte) << (index * 8);
     }
-    if !chunks.remainder().is_empty() {
+    if !remainder.is_empty() {
         hash = hash.wrapping_mul(MULTIPLIER);
     }
     hash ^= hash >> SHIFT;
@@ -1965,7 +1965,9 @@ fn read_disk_index_entries(file: &mut File, len: usize) -> Result<Vec<DiskIndexE
     let mut bytes = vec![0u8; byte_len];
     file.read_exact(&mut bytes)?;
     Ok(bytes
-        .chunks_exact(ROC_INDEX_ENTRY_BYTES as usize)
+        .as_chunks::<{ ROC_INDEX_ENTRY_BYTES as usize }>()
+        .0
+        .iter()
         .map(|entry| DiskIndexEntry {
             observation_bits: u64::from_le_bytes(
                 entry[0..8].try_into().expect("observation bytes"),
