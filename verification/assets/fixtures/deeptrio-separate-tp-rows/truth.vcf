@@ -1,0 +1,11 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##contig=<ID=chr11,length=251>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##bcftools_normVersion=1.22+htslib-1.22
+##bcftools_normCommand=norm -m-any -f ref.fa -Ov -o truth.split.vcf truth.vcf; Date=Tue Sep 29 18:54:51 2026
+##bcftools_normCommand=norm -f ref.fa -Ov -o truth.prepared.vcf truth.split.vcf; Date=Tue Sep 29 18:54:51 2026
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	TRUTH
+chr11	97	.	G	GT	50	PASS	.	GT	0/1
+chr11	104	.	G	GT	50	PASS	.	GT	1/0
+chr11	104	.	G	T	50	PASS	.	GT	0/1
