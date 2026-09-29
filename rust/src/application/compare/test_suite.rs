@@ -62,6 +62,77 @@ mod scratch_tests {
             .join(file)
     }
 
+    #[test]
+    fn deeptrio_duplicate_insertion_keeps_separate_tp_rows() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("verification/assets/fixtures/deeptrio-separate-tp-rows");
+        let root = test_root("deeptrio-separate-tp-rows");
+        let mut options = CompareArgs::with_paths(
+            fixture.join("truth.vcf").display().to_string(),
+            fixture.join("query.vcf").display().to_string(),
+            fixture.join("ref.fa").display().to_string(),
+            root.join("result").display().to_string(),
+        );
+        options.fp_bedfile = Some(fixture.join("confident.bed").display().to_string());
+        options.scratch_prefix = Some(root.join("scratch").display().to_string());
+        run_args(options).unwrap();
+
+        let (_, records) = vcf::load_raw_vcf(&root.join("result.vcf.gz")).unwrap();
+        let rows: Vec<_> = records
+            .iter()
+            .map(|record| {
+                (
+                    record.pos,
+                    record.ref_allele.as_str(),
+                    record.alt_allele.as_str(),
+                    record.samples[0].split(':').take(6).collect::<Vec<_>>(),
+                    record.samples[1].split(':').take(6).collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    97,
+                    "G",
+                    "GT",
+                    vec!["0/1", "TP", "gm", "i1_5", "INDEL", "het"],
+                    vec!["./.", ".", ".", ".", "NOCALL", "nocall"]
+                ),
+                (
+                    104,
+                    "G",
+                    "T",
+                    vec!["0/1", "TP", "gm", "tv", "SNP", "het"],
+                    vec!["1/0", "TP", "gm", "tv", "SNP", "het"]
+                ),
+                (
+                    104,
+                    "G",
+                    "GT",
+                    vec!["1/0", "TP", "gm", "i1_5", "INDEL", "het"],
+                    vec!["./.", ".", ".", ".", "NOCALL", "nocall"]
+                ),
+                (
+                    104,
+                    "G",
+                    "GT",
+                    vec!["./.", ".", ".", ".", "NOCALL", "nocall"],
+                    vec!["1/1", "TP", "gm", "i1_5", "INDEL", "homalt"]
+                ),
+            ]
+        );
+        let summary = fs::read_to_string(root.join("result.summary.csv")).unwrap();
+        assert!(
+            summary
+                .lines()
+                .any(|line| line.contains("INDEL,PASS,2,2,0,1,0,0")),
+            "{summary}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn test_root(label: &str) -> PathBuf {
         let id = SCRATCH_RUN_ID.fetch_add(1, Ordering::Relaxed);
         let root =
