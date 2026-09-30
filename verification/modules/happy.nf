@@ -8,8 +8,6 @@
 process HAPPY_LEGACY {
     tag { "${meta.id}" }
     publishDir { "${params.outdir}/happy/${meta.id}/legacy" }, mode: 'copy', pattern: 'result*'
-    errorStrategy { task.exitStatus == 42 ? 'retry' : 'finish' }
-    maxRetries 2
 
     input:
     tuple val(meta), path(truth_vcf, stageAs: 'truth/*'), path(truth_indexes, stageAs: 'truth/*'), path(query_vcf, stageAs: 'query/*'), path(query_indexes, stageAs: 'query/*'), path(reference), path(reference_indexes), path(fp_bed), path(fp_indexes), path(stratification_files, stageAs: 'stratification/*'), path(reference_sdf, stageAs: 'vcfeval-sdf/*'), val(args)
