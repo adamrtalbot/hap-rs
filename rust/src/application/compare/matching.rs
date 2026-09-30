@@ -626,10 +626,10 @@ pub(super) fn process_cluster(
     // this via a compound-het insertion pair (truth split, query merged into a
     // hetalt) sitting one anchor away from an already-matched Insert+Subst
     // pair; without this gate those leftover FN/FP rows lost their BK=lm.
+    let (insert_positions, subst_positions) = insert_subst_positions(&cluster.query);
     let conflict_positions_still_unmatched = {
         let query_remaining_positions: BTreeSet<usize> =
             query_remaining.iter().map(|v| v.key.pos).collect();
-        let (insert_positions, subst_positions) = insert_subst_positions(&cluster.query);
         insert_positions
             .intersection(&subst_positions)
             .any(|pos| query_remaining_positions.contains(pos))
@@ -638,18 +638,23 @@ pub(super) fn process_cluster(
         && query_sig.is_some()
         && matches!(insert_conflict_counterpart, Some(true))
         && conflict_positions_still_unmatched
-        && cluster.query.iter().any(|variant| {
-            // The hapfail shape needs a genuine hetalt insertion aggregate
-            // (two DISTINCT alts, e.g. `TTGG,TTGGG`). A duplicate-alt
-            // aggregate (`ACCCT,ACCCT`) is a persisted HOMOZYGOUS insertion,
-            // not a reciprocal het pair; legacy still reaches hap:mismatch on
-            // those blocks (chr1:150042104 HG003 → BK=lm), so exclude them.
-            let alts: Vec<&str> = variant.key.alt_allele.split(',').collect();
-            let distinct: BTreeSet<&str> = alts.iter().copied().collect();
+        && cluster.query.iter().any(|query| {
+            // Legacy hapfails when the live Insert+Subst conflict is anchored
+            // by the same multi-allelic insertion on both sides. A shared
+            // single insertion beside another query aggregate still reaches
+            // hap:mismatch (HG003 PEPPER and DeepTrio in issue #70).
+            let distinct: BTreeSet<&str> = query.key.alt_allele.split(',').collect();
             distinct.len() >= 2
                 && distinct
                     .iter()
-                    .any(|alt| alt.len() > variant.key.ref_allele.len())
+                    .any(|alt| alt.len() > query.key.ref_allele.len())
+                && insert_positions.contains(&query.key.pos)
+                && subst_positions.contains(&query.key.pos)
+                && cluster.truth.iter().any(|truth| {
+                    truth.key.pos == query.key.pos
+                        && truth.key.ref_allele == query.key.ref_allele
+                        && truth.key.alt_allele.split(',').collect::<BTreeSet<_>>() == distinct
+                })
         });
     let covered_multi_conflict_mismatch = graph_failed
         && truth_remaining.is_empty()
@@ -3051,6 +3056,14 @@ pub(super) fn mark_cluster_match(
         subtype_counts,
         rows,
     } = outputs;
+    // Legacy only runs haplotype reconciliation for a block with a simple
+    // comparison mismatch. A lone half-call is neutral; after exact pairs
+    // are removed, any remaining called allele supplies that mismatch.
+    let has_called_remainder = cluster
+        .truth
+        .iter()
+        .chain(&cluster.query)
+        .any(|variant| variant.primary_type() != "UNK");
     // Per-record CONF gate: legacy's `XCmpQuantify::countVariants`
     // unconditionally rewrites any output record's BD to UNK when the
     // record's Regions tag set lacks "CONF":
@@ -3063,7 +3076,11 @@ pub(super) fn mark_cluster_match(
     for truth in &cluster.truth {
         if region_state.truth_is_conf(truth)
             && (truth.primary_type() != "UNK"
-                || halfcall_is_covered_by_matched_deletion(truth, full_cluster))
+                || halfcall_is_covered_by_matched_deletion(
+                    truth,
+                    full_cluster,
+                    has_called_remainder,
+                ))
         {
             add_variant_stats(
                 &mut counts
@@ -3166,9 +3183,14 @@ pub(super) fn mark_cluster_match(
             }
             if query_matches_truth_allele_set(query, truth)
                 && selected_alt_sequences(truth) != selected_alt_sequences(query)
-                && !(!region_state.truth_is_conf(truth)
-                    && !region_state.query_is_conf(query)
-                    && outside_conf_repeated_alt_indel_with_neighbor(full_cluster, truth, query))
+                // The same-anchor query SNP may already have been consumed by
+                // exact_match_pairs. It still prevents the duplicate insertion
+                // aggregate from becoming a combined TP row: legacy emits
+                // separate truth and query TP rows for this hap-match shape.
+                && !query_duplicate_alt_aggregate_has_conflicting_neighbor(
+                    query,
+                    &full_cluster.query,
+                )
                 && !query_primitive_splits(
                     truth,
                     reference,
@@ -3256,7 +3278,11 @@ pub(super) fn mark_cluster_match(
         }
         if region_state.truth_is_conf(truth) {
             if truth.primary_type() == "UNK"
-                && !halfcall_is_covered_by_matched_deletion(truth, full_cluster)
+                && !halfcall_is_covered_by_matched_deletion(
+                    truth,
+                    full_cluster,
+                    has_called_remainder,
+                )
             {
                 rows.push(fn_row(
                     truth,
@@ -3342,19 +3368,21 @@ pub(super) fn mark_cluster_match(
 pub(super) fn halfcall_is_covered_by_matched_deletion(
     halfcall: &Variant,
     cluster: &Cluster,
+    has_called_remainder: bool,
 ) -> bool {
     if halfcall.primary_type() != "UNK" || !halfcall.gt.contains('.') {
         return false;
     }
-    let requires_haplotype_reconciliation = cluster.query.iter().any(|query| {
-        (query.gt == "2/1"
-            && query.key.alt_allele.contains(',')
-            && !cluster.truth.iter().any(|truth| truth.key == query.key))
-            || cluster
-                .truth
-                .iter()
-                .any(|truth| truth.key == query.key && !equivalent_gt(&truth.gt, &query.gt))
-    });
+    let requires_haplotype_reconciliation = has_called_remainder
+        || cluster.query.iter().any(|query| {
+            (query.gt == "2/1"
+                && query.key.alt_allele.contains(',')
+                && !cluster.truth.iter().any(|truth| truth.key == query.key))
+                || cluster
+                    .truth
+                    .iter()
+                    .any(|truth| truth.key == query.key && !equivalent_gt(&truth.gt, &query.gt))
+        });
     cluster.truth.iter().any(|truth| {
         let covering_deletion = truth.primary_type() == "INDEL"
             && truth
@@ -3450,9 +3478,12 @@ pub(super) fn mark_cluster_mismatch(
             if query_matches_truth_allele_set(query, truth)
                 && selected_alt_sequences(truth) != selected_alt_sequences(query)
                 && !mixed_type_same_locus_keeps_indel_rows_separate(cluster, truth, query)
-                && !(!region_state.truth_is_conf(truth)
-                    && !region_state.query_is_conf(query)
-                    && outside_conf_repeated_alt_indel_with_neighbor(full_cluster, truth, query))
+                // The duplicate insertion is not an allele-only genotype
+                // mismatch when another query edit shares its anchor. One
+                // haplotype carries that edit as well, so legacy leaves the
+                // truth and query insertion on separate lm rows.
+                && !(query.key.alt_allele.split(',').all(|alt| alt.len() > query.key.ref_allele.len())
+                    && query_duplicate_alt_aggregate_has_conflicting_neighbor(query, &full_cluster.query))
             {
                 pairs.push((ti, qi));
                 paired_truth.insert(ti);
@@ -3745,38 +3776,6 @@ pub(super) fn mixed_type_same_locus_keeps_indel_rows_separate(
                     && selected_alt_sequences(snp_truth) != selected_alt_sequences(snp_query)
             })
     })
-}
-
-pub(super) fn outside_conf_repeated_alt_indel_with_neighbor(
-    cluster: &Cluster,
-    truth: &Variant,
-    query: &Variant,
-) -> bool {
-    if truth.primary_type() != "INDEL" || query.primary_type() != "INDEL" {
-        return false;
-    }
-    // A repeated-ALT `2/1` query indel aggregates two source edits at this
-    // anchor and is projected as `1/1` on output. A direct `1/1` query call
-    // still pairs with its truth counterpart.
-    // When another GT-selected query record shares the anchor,
-    // legacy keeps the het truth indel and two-copy query indel on separate
-    // rows, even when the other record was already matched and removed from
-    // the remainder (HG003 DeepTrio chr12:99121321).
-    let truth_alleles = parse_gt_alleles(&truth.gt);
-    let truth_selected = selected_alt_sequences(truth);
-    let query_selected = selected_alt_sequences(query);
-    let query_alts = query.key.alt_allele.split(',').collect::<Vec<_>>();
-    truth_alleles.contains(&0)
-        && truth_selected.len() == 1
-        && query_alts.len() == 2
-        && query_alts[0] == query_alts[1]
-        && query_selected.len() == 2
-        && query_selected[0] == query_selected[1]
-        && cluster.query.iter().any(|neighbor| {
-            neighbor.key.pos == query.key.pos
-                && neighbor.key != query.key
-                && !selected_alt_sequences(neighbor).is_empty()
-        })
 }
 
 /// Map the per-row `BK` (block kind) tag to the FP classification used by
@@ -4273,15 +4272,14 @@ pub(super) fn variant_is_conf(
     }
     // A selected spanning-deletion (`ALT=*`) is loaded as a legacy
     // half-call (`ALT=.`, GT containing one missing allele). QuantifyRegions
-    // classifies that record by its anchor, even though the source REF span
-    // is retained so the emitted END field can describe the deletion it
-    // overlaps. Treating the entire REF span as the confidence footprint
-    // incorrectly turns confident N/TP half-calls into UNK and makes their
-    // clusters TS_boundary in test_full.
+    // classifies that record by overlap of its retained REF span with CONF.
+    // At HG003 chr6:31140630 and 32423359 the anchor is outside CONF but
+    // the spanning deletion reaches into it; legacy emits BD=N and
+    // Regions=CONF,TS_contained for the half-call in both blocks.
     if variant.primary_type() == "UNK" && variant.gt.contains('.') {
-        return conf_intervals
-            .iter()
-            .any(|interval| interval.matches(&variant.key.chrom, variant.key.pos));
+        return conf_intervals.iter().any(|interval| {
+            interval.overlaps(&variant.key.chrom, variant.key.pos, variant.end_pos())
+        });
     }
     // Legacy rule (QuantifyRegions::annotate):
     //   compute effective [refstart, refend] per gvcf2bed trim rules;

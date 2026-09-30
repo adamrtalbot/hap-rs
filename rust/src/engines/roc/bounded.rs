@@ -429,7 +429,7 @@ fn build_metric_level_sets(
     // Two simultaneous compact level vectors keep peak RSS close to the
     // existing bounded profile while overlapping the independent ALL/PASS
     // and SNP/INDEL metric walks.
-    let worker_count = threads.max(1).min(2).min(groups.len());
+    let worker_count = threads.clamp(1, 2).min(groups.len());
     let next_group = std::sync::atomic::AtomicUsize::new(0);
     let (sender, receiver) = std::sync::mpsc::sync_channel(worker_count);
     let mut results = (0..groups.len()).map(|_| None).collect::<Vec<_>>();
@@ -537,7 +537,7 @@ fn build_metric_indices(
                     continue;
                 }
                 let mask_key = ((*subtype).to_string(), genotype.to_string());
-                for level in masked_levels.get(&mask_key).into_iter().flatten().copied() {
+                for level in masked_levels.get(&mask_key).into_iter().flatten() {
                     let qq = format!("{level:.6}");
                     if !matches!(*subtype, "ti" | "tv") && genotype == "*" {
                         table.set(
@@ -984,19 +984,19 @@ fn legacy_string_hash(value: &str) -> u64 {
     const SHIFT: u32 = 47;
     let bytes = value.as_bytes();
     let mut hash = 0xc70f_6907_u64 ^ (bytes.len() as u64).wrapping_mul(MULTIPLIER);
-    let mut chunks = bytes.chunks_exact(8);
-    for chunk in &mut chunks {
-        let mut key = u64::from_le_bytes(chunk.try_into().expect("eight-byte hash chunk"));
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for chunk in chunks {
+        let mut key = u64::from_le_bytes(*chunk);
         key = key.wrapping_mul(MULTIPLIER);
         key ^= key >> SHIFT;
         key = key.wrapping_mul(MULTIPLIER);
         hash ^= key;
         hash = hash.wrapping_mul(MULTIPLIER);
     }
-    for (index, byte) in chunks.remainder().iter().enumerate() {
+    for (index, byte) in remainder.iter().enumerate() {
         hash ^= u64::from(*byte) << (index * 8);
     }
-    if !chunks.remainder().is_empty() {
+    if !remainder.is_empty() {
         hash = hash.wrapping_mul(MULTIPLIER);
     }
     hash ^= hash >> SHIFT;
@@ -1800,8 +1800,9 @@ impl ObservationStore {
                 .disk_sorted_indices
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if !sorted_indices.contains_key(&passes) {
-                sorted_indices.insert(passes, copy_temp_path(&index)?);
+            if let std::collections::btree_map::Entry::Vacant(entry) = sorted_indices.entry(passes)
+            {
+                entry.insert(copy_temp_path(&index)?);
             }
             return Ok(Box::new(DiskObservationIter {
                 _index_path: index,
@@ -1845,34 +1846,35 @@ struct DiskIndexEntry {
 fn encode_compact_observation(observation: &ObsRecord) -> Result<u64> {
     let mut encoded = 0u64;
     let mut shift = 0u32;
-    let mut push_count = |value: usize| -> Result<()> {
-        if value > 1 {
-            bail!("single ROC observation count {value} cannot be compacted");
-        }
-        encoded |= (value as u64) << shift;
-        shift += 1;
-        Ok(())
-    };
-    for bucket in [
-        &observation.counts.truth_tp,
-        &observation.counts.truth_fn,
-        &observation.counts.query_tp,
-        &observation.counts.query_fp,
-        &observation.counts.query_unk,
-    ] {
-        for value in [
-            bucket.total,
-            bucket.ti,
-            bucket.tv,
-            bucket.het,
-            bucket.homalt,
+    {
+        let mut push_count = |value: usize| -> Result<()> {
+            if value > 1 {
+                bail!("single ROC observation count {value} cannot be compacted");
+            }
+            encoded |= (value as u64) << shift;
+            shift += 1;
+            Ok(())
+        };
+        for bucket in [
+            &observation.counts.truth_tp,
+            &observation.counts.truth_fn,
+            &observation.counts.query_tp,
+            &observation.counts.query_fp,
+            &observation.counts.query_unk,
         ] {
-            push_count(value)?;
+            for value in [
+                bucket.total,
+                bucket.ti,
+                bucket.tv,
+                bucket.het,
+                bucket.homalt,
+            ] {
+                push_count(value)?;
+            }
         }
+        push_count(observation.counts.fp_gt)?;
+        push_count(observation.counts.fp_al)?;
     }
-    push_count(observation.counts.fp_gt)?;
-    push_count(observation.counts.fp_al)?;
-    drop(push_count);
 
     encoded |= u64::from(observation.subtype_bits) << shift;
     shift += 10;
@@ -1890,34 +1892,47 @@ fn encode_compact_observation(observation: &ObsRecord) -> Result<u64> {
 
 fn decode_compact_observation(observation_bits: u64, level_bits: u64) -> Result<ObsRecord> {
     let mut shift = 0u32;
-    let mut next_count = || {
-        let value = ((observation_bits >> shift) & 1) as usize;
-        shift += 1;
-        value
+    let (truth_tp, truth_fn, query_tp, query_fp, query_unk, fp_gt, fp_al) = {
+        let mut next_count = || {
+            let value = ((observation_bits >> shift) & 1) as usize;
+            shift += 1;
+            value
+        };
+        let (truth_tp, truth_fn, query_tp, query_fp, query_unk) = {
+            let mut next_bucket = || CountsBucket {
+                total: next_count(),
+                ti: next_count(),
+                tv: next_count(),
+                het: next_count(),
+                homalt: next_count(),
+            };
+            (
+                next_bucket(),
+                next_bucket(),
+                next_bucket(),
+                next_bucket(),
+                next_bucket(),
+            )
+        };
+        (
+            truth_tp,
+            truth_fn,
+            query_tp,
+            query_fp,
+            query_unk,
+            next_count(),
+            next_count(),
+        )
     };
-    let mut next_bucket = || CountsBucket {
-        total: next_count(),
-        ti: next_count(),
-        tv: next_count(),
-        het: next_count(),
-        homalt: next_count(),
-    };
-    let truth_tp = next_bucket();
-    let truth_fn = next_bucket();
-    let query_tp = next_bucket();
-    let query_fp = next_bucket();
-    let query_unk = next_bucket();
-    drop(next_bucket);
     let counts = Cumul {
         truth_tp,
         truth_fn,
         query_tp,
         query_fp,
         query_unk,
-        fp_gt: next_count(),
-        fp_al: next_count(),
+        fp_gt,
+        fp_al,
     };
-    drop(next_count);
 
     let subtype_bits = ((observation_bits >> shift) & 0x03ff) as u16;
     shift += 10;
@@ -1950,7 +1965,9 @@ fn read_disk_index_entries(file: &mut File, len: usize) -> Result<Vec<DiskIndexE
     let mut bytes = vec![0u8; byte_len];
     file.read_exact(&mut bytes)?;
     Ok(bytes
-        .chunks_exact(ROC_INDEX_ENTRY_BYTES as usize)
+        .as_chunks::<{ ROC_INDEX_ENTRY_BYTES as usize }>()
+        .0
+        .iter()
         .map(|entry| DiskIndexEntry {
             observation_bits: u64::from_le_bytes(
                 entry[0..8].try_into().expect("observation bytes"),
