@@ -1,5 +1,5 @@
 ##fileformat=VCFv4.2
-##contig=<ID=chr12,length=91>
+##contig=<ID=chr12,length=87>
 ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE
 chr12	39	.	G	GGGGTGTGTGTGTGTGTGT	50	PASS	.	GT	0/1
