@@ -3168,7 +3168,7 @@ pub(super) fn mark_cluster_match(
                 && selected_alt_sequences(truth) != selected_alt_sequences(query)
                 && !(!region_state.truth_is_conf(truth)
                     && !region_state.query_is_conf(query)
-                    && outside_conf_two_copy_indel_with_neighbor(full_cluster, truth, query))
+                    && outside_conf_repeated_alt_indel_with_neighbor(full_cluster, truth, query))
                 && !query_primitive_splits(
                     truth,
                     reference,
@@ -3452,7 +3452,7 @@ pub(super) fn mark_cluster_mismatch(
                 && !mixed_type_same_locus_keeps_indel_rows_separate(cluster, truth, query)
                 && !(!region_state.truth_is_conf(truth)
                     && !region_state.query_is_conf(query)
-                    && outside_conf_two_copy_indel_with_neighbor(full_cluster, truth, query))
+                    && outside_conf_repeated_alt_indel_with_neighbor(full_cluster, truth, query))
             {
                 pairs.push((ti, qi));
                 paired_truth.insert(ti);
@@ -3747,7 +3747,7 @@ pub(super) fn mixed_type_same_locus_keeps_indel_rows_separate(
     })
 }
 
-pub(super) fn outside_conf_two_copy_indel_with_neighbor(
+pub(super) fn outside_conf_repeated_alt_indel_with_neighbor(
     cluster: &Cluster,
     truth: &Variant,
     query: &Variant,
@@ -3755,8 +3755,9 @@ pub(super) fn outside_conf_two_copy_indel_with_neighbor(
     if truth.primary_type() != "INDEL" || query.primary_type() != "INDEL" {
         return false;
     }
-    // A two-copy query indel can be an aggregate of two source edits at this
-    // anchor (including a repeated-ALT `2/1` record projected as `1/1`).
+    // A repeated-ALT `2/1` query indel aggregates two source edits at this
+    // anchor and is projected as `1/1` on output. A direct `1/1` query call
+    // still pairs with its truth counterpart.
     // When another GT-selected query record shares the anchor,
     // legacy keeps the het truth indel and two-copy query indel on separate
     // rows, even when the other record was already matched and removed from
@@ -3764,8 +3765,11 @@ pub(super) fn outside_conf_two_copy_indel_with_neighbor(
     let truth_alleles = parse_gt_alleles(&truth.gt);
     let truth_selected = selected_alt_sequences(truth);
     let query_selected = selected_alt_sequences(query);
+    let query_alts = query.key.alt_allele.split(',').collect::<Vec<_>>();
     truth_alleles.contains(&0)
         && truth_selected.len() == 1
+        && query_alts.len() == 2
+        && query_alts[0] == query_alts[1]
         && query_selected.len() == 2
         && query_selected[0] == query_selected[1]
         && cluster.query.iter().any(|neighbor| {

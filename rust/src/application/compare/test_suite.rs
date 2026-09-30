@@ -2651,7 +2651,7 @@ mod memory_guards {
     }
 
     #[test]
-    fn outside_conf_two_copy_query_indel_with_neighbor_stays_unpaired() {
+    fn outside_conf_repeated_alt_query_indel_with_neighbor_stays_unpaired() {
         let truth_indel = variant(102, "A", "AT", "1/0");
         let query_indel = variant(102, "A", "AT,AT", "2/1");
         let query_snp = variant(102, "A", "G", "1/0");
@@ -2663,15 +2663,15 @@ mod memory_guards {
             query: vec![query_indel.clone(), query_snp],
         };
 
-        assert!(outside_conf_two_copy_indel_with_neighbor(
+        assert!(outside_conf_repeated_alt_indel_with_neighbor(
             &cluster,
             &truth_indel,
             &query_indel
         ));
-        assert!(!outside_conf_two_copy_indel_with_neighbor(
+        assert!(!outside_conf_repeated_alt_indel_with_neighbor(
             &cluster,
             &truth_indel,
-            &variant(102, "A", "AT", "0/1")
+            &variant(102, "A", "AT", "1/1")
         ));
     }
 
