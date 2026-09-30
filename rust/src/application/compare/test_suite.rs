@@ -3143,6 +3143,45 @@ mod memory_guards {
     }
 
     #[test]
+    fn deeptrio_mixed_repeat_aggregate_stays_one_hetalt_query_row() {
+        // HG003 DeepTrio chr2:1255863, chr4:152419494, chr10:44341562:
+        // pre.py already combined the two opposite-allele indels. A deletion
+        // at anchor + 1 does not make comparison split that persisted call.
+        for (chrom, alternate, neighbor_ref, bi) in [
+            (
+                "chr2",
+                "A,AATATATATAAATATATATAAATATATATAAATATATATAAATA",
+                "ATAT",
+                "d1_5,i16_plus",
+            ),
+            ("chr4", "A,AACACACACACA", "AC", "d1_5,i6_15"),
+            ("chr10", "G,GGTGTG", "GT", "d1_5,i1_5"),
+        ] {
+            let ref_allele = if chrom == "chr10" { "GG" } else { "AA" };
+            let mut aggregate = variant(100, ref_allele, alternate, "1/2");
+            aggregate.key.chrom = chrom.to_string();
+            let mut neighbor = variant(101, neighbor_ref, &neighbor_ref[..1], "0/1");
+            neighbor.key.chrom = chrom.to_string();
+            let split = split_query_primitives_with_neighbors(
+                &aggregate,
+                &"N".repeat(120),
+                100,
+                &[aggregate.clone(), neighbor],
+                &[],
+            );
+            assert_eq!(split.len(), 1, "{chrom}");
+            assert_eq!(split[0].key, aggregate.key, "{chrom}");
+            let row = fp_like_row(&split[0], &"N".repeat(120), 100, "", "UNK", None, "lm");
+            let sample = row.record.sample_map(1);
+            assert_eq!(sample.get("BD"), Some(&"UNK".to_string()), "{chrom}");
+            assert_eq!(sample.get("BK"), Some(&"lm".to_string()), "{chrom}");
+            assert_eq!(sample.get("BI"), Some(&bi.to_string()), "{chrom}");
+            assert_eq!(sample.get("BVT"), Some(&"INDEL".to_string()), "{chrom}");
+            assert_eq!(sample.get("BLT"), Some(&"hetalt".to_string()), "{chrom}");
+        }
+    }
+
+    #[test]
     fn legacy_only_duplicate_alt_query_projects_for_unmatched_classified_rows() {
         for gt in ["2/1", "1/2", "2|1"] {
             let query = variant(104, "A", "AGTGTGTGT,AGTGTGTGT", gt);

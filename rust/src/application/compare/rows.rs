@@ -911,9 +911,18 @@ fn persisted_query_representation_is_final(
         && (variant.gt == "2/1"
             || (variant.gt == "1/2"
                 && has_overlapping_deletion
-                && alts
+                // DeepTrio's preprocessor has already joined an insertion
+                // and deletion at this anchor. The adjacent deletion must
+                // not trigger a second comparison-time primitive split.
+                && (alts
                     .iter()
-                    .all(|alt| variant.key.ref_allele.len() > alt.len())))
+                    .all(|alt| variant.key.ref_allele.len() > alt.len())
+                    || (alts
+                        .iter()
+                        .any(|alt| variant.key.ref_allele.len() > alt.len())
+                        && alts
+                            .iter()
+                            .any(|alt| variant.key.ref_allele.len() < alt.len())))))
 }
 
 /// Trim common prefix and suffix from (ref, alt) and re-anchor the
