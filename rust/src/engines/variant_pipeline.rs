@@ -1100,18 +1100,17 @@ fn aggregate_location_records_inner(
     let ordinary_insertion_and_deletion = records.iter().all(|record| !record.mixed_edit_primitive)
         && records.iter().any(is_insertion)
         && records.iter().any(is_deletion);
-    // An ordinary deletion keeps its place ahead of an insertion recovered from
-    // a later complex allele (HG003 PEPPER chr8:52884907 `AAG>A` 0/1 then
-    // `A>AG` from `AG>GAGA` 1/0 -> `AAG>A,AGAG` 2/1).
+    // A direct deletion precedes an insertion recovered from a complex allele
+    // even when the complex allele arrived first (HG003 DeepTrio chr10:70).
     let ordinary_deletion_with_mixed_insertion = records
         .iter()
         .any(|record| is_deletion(record) && !record.mixed_edit_primitive)
         && records
             .iter()
             .any(|record| is_insertion(record) && record.mixed_edit_primitive);
-    if (!preserve_pair_order || ordinary_insertion_and_deletion)
-        && !ordinary_deletion_with_mixed_insertion
-    {
+    if ordinary_deletion_with_mixed_insertion {
+        records.sort_by_key(|record| usize::from(!is_deletion(record)));
+    } else if !preserve_pair_order || ordinary_insertion_and_deletion {
         records.sort_by(|left, right| {
             mixed_insertion_order(left, right)
                 .then_with(|| {
@@ -1615,6 +1614,23 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].ref_allele, "TCT");
         assert_eq!(out[0].alt_allele, "TACT,T");
+        assert_eq!(out[0].samples[0], "2/1");
+    }
+
+    #[test]
+    fn location_aggregator_orders_direct_deletion_before_earlier_mixed_insertion() {
+        // HG003 DeepTrio chr10:130333869: the prepared query lists the
+        // complex allele before the direct deletion. Legacy still puts the
+        // direct deletion first in the merged het-alt record.
+        let mut insertion = make_record("chr10", 70, "G", "GCACA", "GT", "1/0");
+        insertion.mixed_edit_primitive = true;
+        let deletion = make_record("chr10", 70, "GCACACA", "G", "GT", "0/1");
+
+        let out = aggregate_location_records(vec![insertion, deletion]);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].ref_allele, "GCACACA");
+        assert_eq!(out[0].alt_allele, "G,GCACACACACA");
         assert_eq!(out[0].samples[0], "2/1");
     }
 

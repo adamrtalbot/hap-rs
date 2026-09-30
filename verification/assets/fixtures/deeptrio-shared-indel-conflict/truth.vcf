@@ -1,0 +1,9 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##contig=<ID=chr1,length=500>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##bcftools_normVersion=1.22+htslib-1.22
+##bcftools_normCommand=norm -m-any -Ov -o verification/assets/fixtures/deeptrio-shared-indel-conflict/truth-split.vcf verification/assets/fixtures/deeptrio-shared-indel-conflict/truth.vcf; Date=Tue Sep 29 18:52:08 2026
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	TRUTH
+chr1	250	.	C	CA	50	PASS	.	GT	1/0
+chr1	250	.	C	CCA	50	PASS	.	GT	0/1

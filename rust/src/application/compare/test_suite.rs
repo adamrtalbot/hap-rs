@@ -62,6 +62,57 @@ mod scratch_tests {
             .join(file)
     }
 
+    #[test]
+    fn chr10_compound_block_keeps_truth_deletion_unmatched() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chr10-compound-block");
+        let root = test_root("chr10-compound-block");
+        let prefix = root.join("result");
+        let mut options = CompareArgs::with_paths(
+            fixture.join("truth.vcf").display().to_string(),
+            fixture.join("query.vcf").display().to_string(),
+            fixture.join("ref.fa").display().to_string(),
+            prefix.display().to_string(),
+        );
+        options.fp_bedfile = Some(fixture.join("confident.bed").display().to_string());
+        options.roc.no_roc = true;
+        options.no_json = true;
+        options.no_write_counts = true;
+        options.scratch_prefix = Some(root.join("scratch").display().to_string());
+        run_args(options).unwrap();
+
+        let summary = fs::read_to_string(suffixed_report_path(&prefix, "summary.csv")).unwrap();
+        for filter in ["ALL", "PASS"] {
+            assert!(
+                summary
+                    .lines()
+                    .any(|line| line.starts_with(&format!("INDEL,{filter},2,0,2,1,1,0,"))),
+                "INDEL {filter} must have TP 0, FN 2, FP 1: {summary}"
+            );
+        }
+        let (_, records) = vcf::load_raw_vcf(&suffixed_report_path(&prefix, "vcf.gz")).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.samples[0].contains(":FN:"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.samples[1].contains(":FP:"))
+                .count(),
+            2
+        );
+        assert!(records.iter().any(|record| {
+            record.ref_allele == "GCACACA"
+                && record.alt_allele == "G,GCACACACACA"
+                && record.samples[1].starts_with("2/1:FP:")
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn test_root(label: &str) -> PathBuf {
         let id = SCRATCH_RUN_ID.fetch_add(1, Ordering::Relaxed);
         let root =
@@ -2012,7 +2063,7 @@ mod memory_guards {
     }
 
     #[test]
-    fn spanning_deletion_halfcall_uses_anchor_for_confidence() {
+    fn spanning_deletion_halfcall_inside_confidence_is_confident() {
         let halfcall = variant(100, "ACGT", ".", "0|.");
         let conf = [Interval {
             chrom: "chr21".to_string(),
@@ -2020,6 +2071,41 @@ mod memory_guards {
             end: 100,
         }];
         assert!(variant_is_conf(&halfcall, "N", 100, 103, &conf));
+    }
+
+    #[test]
+    fn chr6_halfcalls_reaching_confidence_are_confident() {
+        for (pos, reference, conf_start) in [
+            (31140630, "CATATAT", 31140634),
+            (32423359, "ATATATATATATATATATATATATATAT", 32423364),
+        ] {
+            let mut halfcall = variant(pos, reference, ".", "0/.");
+            halfcall.key.chrom = "chr6".to_string();
+            let confidence = [Interval {
+                chrom: "chr6".to_string(),
+                start: conf_start,
+                end: conf_start + 50,
+            }];
+            assert!(variant_is_conf(
+                &halfcall,
+                "N",
+                pos,
+                halfcall.end_pos(),
+                &confidence,
+            ));
+            let outside = [Interval {
+                chrom: "chr6".to_string(),
+                start: halfcall.end_pos(),
+                end: halfcall.end_pos() + 50,
+            }];
+            assert!(!variant_is_conf(
+                &halfcall,
+                "N",
+                pos,
+                halfcall.end_pos(),
+                &outside,
+            ));
+        }
     }
 
     #[test]
@@ -2035,15 +2121,19 @@ mod memory_guards {
         };
         assert!(!halfcall_is_covered_by_matched_deletion(
             &cluster.truth[1],
-            &cluster
+            &cluster,
+            false,
         ));
         cluster.query.push(variant(103, "T", "TA,TAA", "2/1"));
         assert!(halfcall_is_covered_by_matched_deletion(
             &cluster.truth[1],
-            &cluster
+            &cluster,
+            false,
         ));
         let outside = variant(104, "T", ".", "0|.");
-        assert!(!halfcall_is_covered_by_matched_deletion(&outside, &cluster));
+        assert!(!halfcall_is_covered_by_matched_deletion(
+            &outside, &cluster, false
+        ));
     }
 
     #[test]
@@ -2058,7 +2148,9 @@ mod memory_guards {
             query: vec![variant(102, "G", "T", "1/1")],
         };
 
-        assert!(halfcall_is_covered_by_matched_deletion(&halfcall, &cluster));
+        assert!(halfcall_is_covered_by_matched_deletion(
+            &halfcall, &cluster, false
+        ));
     }
 
     #[test]
@@ -2269,6 +2361,78 @@ mod memory_guards {
             lines.iter().filter(|line| line.contains(":FP:lm:")).count(),
             2,
             "both query alleles must be FP with BK=lm, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn deeptrio_shared_insertion_with_query_substitution_stays_separate() {
+        // HG003 DeepTrio chr1:218925705, remapped to chr1:250. These are the
+        // identical records handed to comparison by both implementations.
+        let make = |alt: &str, gt: &str| {
+            let mut record = variant(250, "C", alt, gt);
+            record.key.chrom = "chr1".to_string();
+            record
+        };
+        let cluster = Cluster {
+            chrom: "chr1".to_string(),
+            start: 250,
+            end: 250,
+            truth: vec![make("CA", "1/0"), make("CCA", "0/1")],
+            query: vec![make("G", "1/0"), make("CCA,CCA", "2/1")],
+        };
+        // The row pairing depends on the same-anchor edits, not the flanking
+        // sequence. Keep this unit test self-contained in the packaged crate;
+        // the parity fixture retains the real GRCh38 reference slice.
+        let reference = format!("{}C{}", "A".repeat(249), "A".repeat(250));
+        let references = BTreeMap::from([("chr1".to_string(), reference)]);
+        let mut counts = BTreeMap::new();
+        let mut subtype_counts = BTreeMap::new();
+        let mut rows = Vec::new();
+        process_cluster(
+            &cluster,
+            &references,
+            None,
+            ComparisonConfig {
+                no_hc: false,
+                max_enum: 100_000,
+                hb_expand: 0,
+            },
+            &mut counts,
+            &mut subtype_counts,
+            &mut rows,
+        )
+        .unwrap();
+        let observed = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.record.alt_allele.as_str(),
+                    row.record.samples[0].as_str(),
+                    row.record.samples[1].as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(observed.len(), 4, "rows={observed:?}");
+        assert!(
+            observed.iter().any(|(alt, truth, query)| {
+                *alt == "CCA"
+                    && truth.contains(":FN:lm:i1_5:INDEL:het:")
+                    && query.contains(":NOCALL:nocall:")
+            }),
+            "rows={observed:?}"
+        );
+        assert!(
+            observed.iter().any(|(alt, truth, query)| {
+                *alt == "CCA"
+                    && truth.contains(":NOCALL:nocall:")
+                    && query.contains(":FP:lm:i1_5:INDEL:homalt:")
+            }),
+            "rows={observed:?}"
+        );
+        assert!(
+            !observed
+                .iter()
+                .any(|(_, truth, query)| truth.contains(":FN:am:") && query.contains(":FP:am:"))
         );
     }
 

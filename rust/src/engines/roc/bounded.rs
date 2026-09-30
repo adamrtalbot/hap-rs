@@ -1800,8 +1800,9 @@ impl ObservationStore {
                 .disk_sorted_indices
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if let std::collections::btree_map::Entry::Vacant(slot) = sorted_indices.entry(passes) {
-                slot.insert(copy_temp_path(&index)?);
+            if let std::collections::btree_map::Entry::Vacant(entry) = sorted_indices.entry(passes)
+            {
+                entry.insert(copy_temp_path(&index)?);
             }
             return Ok(Box::new(DiskObservationIter {
                 _index_path: index,
@@ -1845,33 +1846,35 @@ struct DiskIndexEntry {
 fn encode_compact_observation(observation: &ObsRecord) -> Result<u64> {
     let mut encoded = 0u64;
     let mut shift = 0u32;
-    let mut push_count = |value: usize| -> Result<()> {
-        if value > 1 {
-            bail!("single ROC observation count {value} cannot be compacted");
-        }
-        encoded |= (value as u64) << shift;
-        shift += 1;
-        Ok(())
-    };
-    for bucket in [
-        &observation.counts.truth_tp,
-        &observation.counts.truth_fn,
-        &observation.counts.query_tp,
-        &observation.counts.query_fp,
-        &observation.counts.query_unk,
-    ] {
-        for value in [
-            bucket.total,
-            bucket.ti,
-            bucket.tv,
-            bucket.het,
-            bucket.homalt,
+    {
+        let mut push_count = |value: usize| -> Result<()> {
+            if value > 1 {
+                bail!("single ROC observation count {value} cannot be compacted");
+            }
+            encoded |= (value as u64) << shift;
+            shift += 1;
+            Ok(())
+        };
+        for bucket in [
+            &observation.counts.truth_tp,
+            &observation.counts.truth_fn,
+            &observation.counts.query_tp,
+            &observation.counts.query_fp,
+            &observation.counts.query_unk,
         ] {
-            push_count(value)?;
+            for value in [
+                bucket.total,
+                bucket.ti,
+                bucket.tv,
+                bucket.het,
+                bucket.homalt,
+            ] {
+                push_count(value)?;
+            }
         }
+        push_count(observation.counts.fp_gt)?;
+        push_count(observation.counts.fp_al)?;
     }
-    push_count(observation.counts.fp_gt)?;
-    push_count(observation.counts.fp_al)?;
 
     encoded |= u64::from(observation.subtype_bits) << shift;
     shift += 10;
@@ -1889,31 +1892,46 @@ fn encode_compact_observation(observation: &ObsRecord) -> Result<u64> {
 
 fn decode_compact_observation(observation_bits: u64, level_bits: u64) -> Result<ObsRecord> {
     let mut shift = 0u32;
-    let mut next_count = || {
-        let value = ((observation_bits >> shift) & 1) as usize;
-        shift += 1;
-        value
+    let (truth_tp, truth_fn, query_tp, query_fp, query_unk, fp_gt, fp_al) = {
+        let mut next_count = || {
+            let value = ((observation_bits >> shift) & 1) as usize;
+            shift += 1;
+            value
+        };
+        let (truth_tp, truth_fn, query_tp, query_fp, query_unk) = {
+            let mut next_bucket = || CountsBucket {
+                total: next_count(),
+                ti: next_count(),
+                tv: next_count(),
+                het: next_count(),
+                homalt: next_count(),
+            };
+            (
+                next_bucket(),
+                next_bucket(),
+                next_bucket(),
+                next_bucket(),
+                next_bucket(),
+            )
+        };
+        (
+            truth_tp,
+            truth_fn,
+            query_tp,
+            query_fp,
+            query_unk,
+            next_count(),
+            next_count(),
+        )
     };
-    let mut next_bucket = || CountsBucket {
-        total: next_count(),
-        ti: next_count(),
-        tv: next_count(),
-        het: next_count(),
-        homalt: next_count(),
-    };
-    let truth_tp = next_bucket();
-    let truth_fn = next_bucket();
-    let query_tp = next_bucket();
-    let query_fp = next_bucket();
-    let query_unk = next_bucket();
     let counts = Cumul {
         truth_tp,
         truth_fn,
         query_tp,
         query_fp,
         query_unk,
-        fp_gt: next_count(),
-        fp_al: next_count(),
+        fp_gt,
+        fp_al,
     };
 
     let subtype_bits = ((observation_bits >> shift) & 0x03ff) as u16;
