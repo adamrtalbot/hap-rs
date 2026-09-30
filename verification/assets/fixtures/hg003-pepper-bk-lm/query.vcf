@@ -1,0 +1,21 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr1,length=401>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	HG003
+chr1	127	.	T	TC	46.4	PASS	.	GT	1/1
+chr1	173	.	G	GC	39.7	PASS	.	GT	1/1
+chr1	178	.	G	GC	42.2	PASS	.	GT	1/1
+chr1	187	.	G	GC	35.9	PASS	.	GT	1/1
+chr1	189	.	G	GC	35.2	PASS	.	GT	1/1
+chr1	199	.	A	AG	17.4	PASS	.	GT	1/1
+chr1	200	.	GCC	G	4.9	PASS	.	GT	0/1
+chr1	203	.	G	GC	9.8	PASS	.	GT	1/1
+chr1	211	.	G	T	17.7	PASS	.	GT	0/1
+chr1	212	.	T	C	20.4	PASS	.	GT	0/1
+chr1	216	.	G	C	22.8	PASS	.	GT	1/0
+chr1	216	.	G	GC	22.8	PASS	.	GT	0/1
+chr1	218	.	G	GC	28.1	PASS	.	GT	0/1
+chr1	218	.	GCGGC	G	28.1	PASS	.	GT	1/0
+chr1	224	.	G	GC	26	PASS	.	GT	1/0
+chr1	224	.	G	T	26	PASS	.	GT	0/1
+chr1	229	.	G	GC	24	PASS	.	GT	1/1
