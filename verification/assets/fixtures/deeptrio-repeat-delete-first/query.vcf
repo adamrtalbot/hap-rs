@@ -1,0 +1,7 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr2,length=61>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	QUERY
+chr2	32	.	AA	AATATATATAAATATATATAAATATATATAAATATATATAAATA,T	19.8	PASS	.	GT:AD	1/2:0,7,3
+chr2	34	.	TATA	A	3.1	PASS	.	GT:AD	0/1:10,3
