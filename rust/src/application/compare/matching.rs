@@ -3051,6 +3051,14 @@ pub(super) fn mark_cluster_match(
         subtype_counts,
         rows,
     } = outputs;
+    // Legacy only runs haplotype reconciliation for a block with a simple
+    // comparison mismatch. A lone half-call is neutral; after exact pairs
+    // are removed, any remaining called allele supplies that mismatch.
+    let has_called_remainder = cluster
+        .truth
+        .iter()
+        .chain(&cluster.query)
+        .any(|variant| variant.primary_type() != "UNK");
     // Per-record CONF gate: legacy's `XCmpQuantify::countVariants`
     // unconditionally rewrites any output record's BD to UNK when the
     // record's Regions tag set lacks "CONF":
@@ -3063,7 +3071,11 @@ pub(super) fn mark_cluster_match(
     for truth in &cluster.truth {
         if region_state.truth_is_conf(truth)
             && (truth.primary_type() != "UNK"
-                || halfcall_is_covered_by_matched_deletion(truth, full_cluster))
+                || halfcall_is_covered_by_matched_deletion(
+                    truth,
+                    full_cluster,
+                    has_called_remainder,
+                ))
         {
             add_variant_stats(
                 &mut counts
@@ -3261,7 +3273,11 @@ pub(super) fn mark_cluster_match(
         }
         if region_state.truth_is_conf(truth) {
             if truth.primary_type() == "UNK"
-                && !halfcall_is_covered_by_matched_deletion(truth, full_cluster)
+                && !halfcall_is_covered_by_matched_deletion(
+                    truth,
+                    full_cluster,
+                    has_called_remainder,
+                )
             {
                 rows.push(fn_row(
                     truth,
@@ -3347,19 +3363,21 @@ pub(super) fn mark_cluster_match(
 pub(super) fn halfcall_is_covered_by_matched_deletion(
     halfcall: &Variant,
     cluster: &Cluster,
+    has_called_remainder: bool,
 ) -> bool {
     if halfcall.primary_type() != "UNK" || !halfcall.gt.contains('.') {
         return false;
     }
-    let requires_haplotype_reconciliation = cluster.query.iter().any(|query| {
-        (query.gt == "2/1"
-            && query.key.alt_allele.contains(',')
-            && !cluster.truth.iter().any(|truth| truth.key == query.key))
-            || cluster
-                .truth
-                .iter()
-                .any(|truth| truth.key == query.key && !equivalent_gt(&truth.gt, &query.gt))
-    });
+    let requires_haplotype_reconciliation = has_called_remainder
+        || cluster.query.iter().any(|query| {
+            (query.gt == "2/1"
+                && query.key.alt_allele.contains(',')
+                && !cluster.truth.iter().any(|truth| truth.key == query.key))
+                || cluster
+                    .truth
+                    .iter()
+                    .any(|truth| truth.key == query.key && !equivalent_gt(&truth.gt, &query.gt))
+        });
     cluster.truth.iter().any(|truth| {
         let covering_deletion = truth.primary_type() == "INDEL"
             && truth
@@ -4249,15 +4267,14 @@ pub(super) fn variant_is_conf(
     }
     // A selected spanning-deletion (`ALT=*`) is loaded as a legacy
     // half-call (`ALT=.`, GT containing one missing allele). QuantifyRegions
-    // classifies that record by its anchor, even though the source REF span
-    // is retained so the emitted END field can describe the deletion it
-    // overlaps. Treating the entire REF span as the confidence footprint
-    // incorrectly turns confident N/TP half-calls into UNK and makes their
-    // clusters TS_boundary in test_full.
+    // classifies that record by overlap of its retained REF span with CONF.
+    // At HG003 chr6:31140630 and 32423359 the anchor is outside CONF but
+    // the spanning deletion reaches into it; legacy emits BD=N and
+    // Regions=CONF,TS_contained for the half-call in both blocks.
     if variant.primary_type() == "UNK" && variant.gt.contains('.') {
-        return conf_intervals
-            .iter()
-            .any(|interval| interval.matches(&variant.key.chrom, variant.key.pos));
+        return conf_intervals.iter().any(|interval| {
+            interval.overlaps(&variant.key.chrom, variant.key.pos, variant.end_pos())
+        });
     }
     // Legacy rule (QuantifyRegions::annotate):
     //   compute effective [refstart, refend] per gvcf2bed trim rules;
