@@ -144,43 +144,24 @@ impl DeletionSets {
     }
 }
 
-/// Per-chromosome left-shift state carried across records during normalization.
-///
-/// `prev_end` is the running maximum reference end feeding the primitive
-/// splitter (unchanged legacy semantics). The remaining fields compute the
-/// left-shift floor — how far left a record may slide — as the maximum of:
-///
-/// * `barrier`: the end of a *non-insertion* record (deletion / substitution /
-///   complex) at a strictly earlier original position. A left-shift may not
-///   cross a base another variant deleted or changed.
-/// * substitution ends at the *same* original position: a SNP sharing a
-///   position with a deletion still blocks it (chr21:9920194). These come from
-///   `NormalizeContext::substitution_end_by_position`, pre-scanned so the
-///   barrier is order-invariant regardless of which record is listed first.
-///
-/// A pure insertion never floors anything, and records at the same position do
-/// not floor each other unless one is a substitution — so a colocated het
-/// insertion + deletion both reach their shared anchor and the location
-/// aggregator re-merges them into one het-alt, order-invariantly.
-/// `group_pos`/`pending` stage the current position's non-insertion end until a
-/// later position commits it into `barrier`.
-#[derive(Clone, Copy, Default)]
+/// The primitive splitter still needs the preceding source span for its
+/// cross-record anchoring rules. Normalization boundaries are separate: they
+/// come from called, decomposed records after each position group is drained.
+#[derive(Default)]
 struct ShiftFloors {
     prev_end: usize,
-    barrier: usize,
     group_pos: usize,
-    pending: usize,
     group_prev_end: usize,
+    barrier_by_sample: Vec<usize>,
+    source_calls: Vec<(RawVcfRecord, Option<SymbolicDeletionMaterialization>)>,
+    staged: Vec<NormalizationCall>,
 }
 
-/// A pure insertion extends the REF prefix on every ALT — it adds bases without
-/// deleting or changing any, so it never blocks a neighbour's left-shift.
-fn record_is_pure_insertion(record: &crate::domain::RawVcfRecord) -> bool {
-    let reference = record.ref_allele.as_bytes();
-    record
-        .alt_allele
-        .split(',')
-        .all(|alt| alt.len() > reference.len() && alt.as_bytes().starts_with(reference))
+struct NormalizationCall {
+    record: RawVcfRecord,
+    leftshift_eligible: bool,
+    release_leftshift_floor: bool,
+    preserve_merged_hetalt_order: bool,
 }
 
 /// A substitution changes an existing reference base (SNP, MNP, complex): some
@@ -206,11 +187,6 @@ struct NormalizeContext<'a> {
     string_format_fields: &'a BTreeSet<String>,
     reference_sequences: &'a std::collections::BTreeMap<String, String>,
     deletions: &'a DeletionSets,
-    /// Greatest reference end of a substitution at each `(chrom, pos)`. A
-    /// deletion sharing a position with a SNP is floored here regardless of the
-    /// two records' input order, so the barrier stays order-invariant
-    /// (chr21:9920194). Built in the single input pre-scan.
-    substitution_end_by_position: &'a HashMap<(String, usize), usize>,
 }
 
 fn observe_following_spanning_deletions(
@@ -491,7 +467,7 @@ fn run_inner(
         );
         if record_is_substitution(record.raw()) {
             let raw = record.raw();
-            let end = raw.pos + raw.ref_allele.len().max(1) - 1;
+            let end = raw.end_pos();
             substitution_end_by_position
                 .entry((raw.chrom.clone(), raw.pos))
                 .and_modify(|current| *current = (*current).max(end))
@@ -567,7 +543,6 @@ fn run_inner(
         string_format_fields: &string_format_fields,
         reference_sequences,
         deletions: &deletion_sets,
-        substitution_end_by_position: &substitution_end_by_position,
     };
     if let Some(prepared_records) = prepared_records {
         process_blocksplit_jobs(
@@ -697,8 +672,12 @@ fn run_inner(
                     if job.is_some_and(|job| !job.included_indices.contains(&record_index)) {
                         continue;
                     }
-                    if job.is_some_and(|job| job.reset_before_indices.contains(&record_index)) {
-                        prev_end_by_chrom.remove(&record.chrom);
+                    if job.is_some_and(|job| job.reset_before_indices.contains(&record_index))
+                        && let Some(mut floors) = prev_end_by_chrom.remove(&record.chrom)
+                    {
+                        drain_normalization_group(&mut floors, &ctx, &mut |record| {
+                            output.push(record, job_index)
+                        })?;
                     }
                     if !normalization_enabled {
                         output.push(
@@ -718,6 +697,11 @@ fn run_inner(
                         |record| output.push(record, job_index),
                     )?;
                 }
+            }
+            for floors in prev_end_by_chrom.values_mut() {
+                drain_normalization_group(floors, &ctx, &mut |record| {
+                    output.push(record, job_index)
+                })?;
             }
         }
     }
@@ -832,8 +816,13 @@ fn process_blocksplit_jobs(
                             let (record, symbolic_deletion) = reader.read_at(record_index)?;
                             if jobs.is_some_and(|jobs| {
                                 jobs[job_index].reset_before_indices.contains(&record_index)
-                            }) {
-                                previous_ends.remove(&record.chrom);
+                            }) && let Some(mut floors) = previous_ends.remove(&record.chrom)
+                            {
+                                drain_normalization_group(&mut floors, ctx, &mut |record| {
+                                    sender.send((job_index, Ok(record))).map_err(|_| {
+                                        anyhow::anyhow!("preprocess output receiver stopped")
+                                    })
+                                })?;
                             }
                             process_normalized_record(
                                 record,
@@ -848,6 +837,16 @@ fn process_blocksplit_jobs(
                             )
                         })();
                         if let Err(error) = result {
+                            let _ = sender.send((job_index, Err(error)));
+                            break;
+                        }
+                    }
+                    for floors in previous_ends.values_mut() {
+                        if let Err(error) = drain_normalization_group(floors, ctx, &mut |record| {
+                            sender
+                                .send((job_index, Ok(record)))
+                                .map_err(|_| anyhow::anyhow!("preprocess output receiver stopped"))
+                        }) {
                             let _ = sender.send((job_index, Err(error)));
                             break;
                         }
@@ -890,21 +889,9 @@ fn process_normalized_record(
     let &NormalizeContext {
         args,
         gender,
-        leftshift,
-        decompose,
         somatic_mode,
-        string_format_fields,
-        reference_sequences,
-        deletions,
-        substitution_end_by_position,
-    } = ctx;
-    let DeletionSets {
-        following_spanning: following_spanning_deletions,
-        equal_floor_blocked: equal_floor_blocked_deletions,
-        released_following: released_following_deletions,
-        mixed_deletion_merge_partners,
         ..
-    } = deletions;
+    } = ctx;
     if args.convert_gvcf_to_vcf {
         ensure_missing_ad(&mut record);
     }
@@ -1003,35 +990,34 @@ fn process_normalized_record(
         normalise_haploid_genotypes(&mut record, gender == PreprocessGender::Male);
     }
 
-    // Capture before record is potentially consumed by vec![record].
-    let record_chrom = record.chrom.clone();
-    let orig_end = record.pos + record.ref_allele.len().max(1) - 1;
-    let record_pos = record.pos;
-    let is_pure_insertion = record_is_pure_insertion(&record);
-    let is_substitution = record_is_substitution(&record);
-    let floors = prev_end_by_chrom.entry(record_chrom.clone()).or_default();
-    // Advancing to a strictly later position commits the previous position's
-    // non-insertion end into the barrier and clears the staged term.
-    if record_pos > floors.group_pos {
-        floors.barrier = floors.barrier.max(floors.pending);
-        floors.group_pos = record_pos;
-        floors.pending = 0;
+    let floors = prev_end_by_chrom.entry(record.chrom.clone()).or_default();
+    if record.pos > floors.group_pos {
+        drain_normalization_group(floors, ctx, &mut emit)?;
+        floors.group_pos = record.pos;
         floors.group_prev_end = floors.prev_end;
     }
+    floors.prev_end = floors.prev_end.max(record.end_pos());
+    floors.source_calls.push((record, symbolic_deletion));
+    Ok(())
+}
+
+fn stage_primitive_calls(
+    record: RawVcfRecord,
+    symbolic_deletion: Option<SymbolicDeletionMaterialization>,
+    floors: &mut ShiftFloors,
+    ctx: &NormalizeContext<'_>,
+    group_has_complex_allele: bool,
+) {
+    let decompose = ctx.decompose;
+    let reference_sequences = ctx.reference_sequences;
+    let DeletionSets {
+        following_spanning: following_spanning_deletions,
+        equal_floor_blocked: equal_floor_blocked_deletions,
+        released_following: released_following_deletions,
+        mixed_deletion_merge_partners,
+        ..
+    } = ctx.deletions;
     let prev_end = floors.group_prev_end;
-    // A substitution at this position floors a shifting record here (a SNP
-    // blocks a colocated deletion). Substitutions do not left-shift themselves,
-    // so they don't consult it. The lookup is pre-scanned, so it is independent
-    // of whether the SNP or the deletion is listed first.
-    let same_position_substitution = if is_substitution {
-        0
-    } else {
-        substitution_end_by_position
-            .get(&(record_chrom.clone(), record_pos))
-            .copied()
-            .unwrap_or(0)
-    };
-    let leftshift_floor = floors.barrier.max(same_position_substitution);
     let release_leftshift_floor = released_following_deletions.contains(&(
         record.chrom.clone(),
         record.pos,
@@ -1109,7 +1095,7 @@ fn process_normalized_record(
             vec![source]
         } else if decompose && !source.alt_allele.split(',').any(is_symbolic_allele) {
             if let Some(reference) = reference_sequences.get(&source.chrom) {
-                variant_pipeline::primitive_split_with_context(
+                variant_pipeline::primitive_split_with_group_context(
                     &source,
                     reference.as_bytes(),
                     prev_end,
@@ -1125,6 +1111,15 @@ fn process_normalized_record(
                         source.ref_allele.clone(),
                         source.alt_allele.clone(),
                     )),
+                    variant_pipeline::PrimitiveGroupContext {
+                        has_complex_allele: group_has_complex_allele,
+                        normalization_floor: called_samples(&source)
+                            .map(|sample| {
+                                floors.barrier_by_sample.get(sample).copied().unwrap_or(0)
+                            })
+                            .max()
+                            .unwrap_or(0),
+                    },
                 )
             } else {
                 vec![source]
@@ -1148,51 +1143,153 @@ fn process_normalized_record(
         // Only leftshift records that came through primitive_split
         // unchanged. Fanned-out primitives are already canonical.
         let leftshift_eligible = emitted.len() == 1;
-        for mut split in emitted {
-            if leftshift
-                && leftshift_eligible
-                && !split.alt_allele.contains(',')
-                && split.alt_allele != "."
-                && !split.alt_allele.is_empty()
-                && !is_symbolic_allele(&split.alt_allele)
-                && let Some(reference) = reference_sequences.get(&split.chrom)
-            {
-                if release_leftshift_floor {
-                    extend_record_left(&mut split, reference.as_bytes());
-                } else {
-                    apply_left_shift(&mut split, reference.as_bytes(), leftshift_floor);
-                }
-            }
-            // The source-level primitive aggregator has assigned legacy's
-            // ALT and GT order; sorting or reversing it here would undo that.
-            if !(preserve_merged_hetalt_order && split.alt_allele.contains(',')) {
-                canonicalize_multi_allelic_order(&mut split);
-            }
-            canonicalize_legacy_genotypes(&mut split);
-            if split.qual.is_empty() || split.qual == "." {
-                split.qual = "0".to_string();
-            }
-            blank_secondary_sample_annotations(&mut split, args.bcf, string_format_fields);
-            // Canonical FORMAT ordering: GT → AD/ADO/DP (fixed) → other
-            // integer-typed fields alphabetical → float-typed alphabetical →
-            // string-typed alphabetical. Mirrors the `int_fmts/float_fmts/
-            // string_fmts` loop order in `VariantWriter.cpp` combined with
-            // dynamic per-value type detection.
-            reorder_format_fields(&mut split);
-            emit(vcf::ValidatedVcfRecord::try_from_raw(
-                split,
-                QueryProvenance::Unavailable,
-            )?)?;
+        for split in emitted {
+            floors.staged.push(NormalizationCall {
+                record: split,
+                leftshift_eligible,
+                release_leftshift_floor,
+                preserve_merged_hetalt_order,
+            });
         }
     }
-    // Advance the per-chromosome boundaries. `prev_end` tracks every record's
-    // span for the primitive splitter. A non-insertion contributes its end to
-    // the current position group, committed into `barrier` at the next
-    // position; same-position substitution floors come from the pre-scan.
-    let floors = prev_end_by_chrom.entry(record_chrom).or_default();
-    floors.prev_end = floors.prev_end.max(orig_end);
-    if !is_pure_insertion {
-        floors.pending = floors.pending.max(orig_end);
+}
+
+fn called_samples(record: &RawVcfRecord) -> impl Iterator<Item = usize> + '_ {
+    let gt_index = record.format_keys().iter().position(|key| *key == "GT");
+    record
+        .samples
+        .iter()
+        .enumerate()
+        .filter_map(move |(index, sample)| {
+            let called = gt_index
+                .and_then(|gt_index| sample.split(':').nth(gt_index))
+                .is_some_and(|gt| {
+                    gt.split(['/', '|'])
+                        .any(|allele| allele.parse::<usize>().is_ok_and(|allele| allele > 0))
+                });
+            called.then_some(index)
+        })
+}
+
+/// VariantPrimitiveSplitter uses VariantCompare before the normalizer sees a
+/// call: SNPs, reference-consuming edits, then unpadded insertions. Compare the
+/// internal primitive, because adding the VCF anchor changes both its position
+/// and reference length. Equal edits retain their arrival order/multiplicity.
+fn normalization_priority(record: &RawVcfRecord) -> (usize, u8, usize, usize, &str) {
+    let (start, end, alt) = record.primitive_identity.as_ref().map_or(
+        (record.pos, record.end_pos(), record.alt_allele.as_str()),
+        |identity| (identity.start, identity.end, identity.alt.as_str()),
+    );
+    let ref_len = end.saturating_add(1).saturating_sub(start);
+    let class = if ref_len == 1 && alt.len() == 1 {
+        0
+    } else if ref_len == 0 && !alt.is_empty() {
+        2
+    } else {
+        1
+    };
+    let pos = if ref_len == 0 {
+        start.saturating_sub(1)
+    } else {
+        start
+    };
+    (pos, class, ref_len, alt.len(), alt)
+}
+
+fn drain_normalization_group(
+    floors: &mut ShiftFloors,
+    ctx: &NormalizeContext<'_>,
+    emit: &mut impl FnMut(vcf::ValidatedVcfRecord) -> Result<()>,
+) -> Result<()> {
+    // Primitive decomposition consumes the buffered source group. Its
+    // realignment decision applies to the group's called alleles, including
+    // padded insertions beside a complex call, before normalization sees them.
+    let group_has_complex_allele = ctx.decompose
+        && floors.source_calls.iter().any(|(record, _)| {
+            !record.alt_allele.split(',').any(is_symbolic_allele)
+                && variant_pipeline::record_has_complex_allele(record)
+        });
+    if ctx.decompose || ctx.leftshift {
+        // VariantAlleleSplitter's half-call order precedes primitive
+        // decomposition: start ascending, reference end descending, ALT
+        // ascending. In the leftshift-only path this is also the order in
+        // which the normalizer receives the calls.
+        floors.source_calls.sort_by(|(left, _), (right, _)| {
+            left.pos
+                .cmp(&right.pos)
+                .then(right.end_pos().cmp(&left.end_pos()))
+                .then(left.alt_allele.cmp(&right.alt_allele))
+        });
+    }
+    for (record, symbolic_deletion) in std::mem::take(&mut floors.source_calls) {
+        stage_primitive_calls(
+            record,
+            symbolic_deletion,
+            floors,
+            ctx,
+            group_has_complex_allele,
+        );
+    }
+    if ctx.decompose {
+        floors.staged.sort_by(|left, right| {
+            normalization_priority(&left.record).cmp(&normalization_priority(&right.record))
+        });
+    } else if ctx.leftshift {
+        floors.staged.sort_by(|left, right| {
+            left.record
+                .pos
+                .cmp(&right.record.pos)
+                .then(right.record.end_pos().cmp(&left.record.end_pos()))
+                .then(left.record.alt_allele.cmp(&right.record.alt_allele))
+        });
+    }
+    for call in floors.staged.drain(..) {
+        let NormalizationCall {
+            record: mut split,
+            leftshift_eligible,
+            release_leftshift_floor,
+            preserve_merged_hetalt_order,
+        } = call;
+        let leftshift_floor = called_samples(&split)
+            .map(|sample| floors.barrier_by_sample.get(sample).copied().unwrap_or(0))
+            .max()
+            .unwrap_or(0);
+        if ctx.leftshift
+            && leftshift_eligible
+            && !split.alt_allele.contains(',')
+            && split.alt_allele != "."
+            && !split.alt_allele.is_empty()
+            && !is_symbolic_allele(&split.alt_allele)
+            && let Some(reference) = ctx.reference_sequences.get(&split.chrom)
+        {
+            if release_leftshift_floor {
+                extend_record_left(&mut split, reference.as_bytes());
+            } else {
+                apply_left_shift(&mut split, reference.as_bytes(), leftshift_floor);
+            }
+        }
+        // Legacy advances current_maxpos from the normalized call, including
+        // insertions, and only in samples that call an ALT.
+        for sample in called_samples(&split) {
+            floors
+                .barrier_by_sample
+                .resize(floors.barrier_by_sample.len().max(sample + 1), 0);
+            floors.barrier_by_sample[sample] =
+                floors.barrier_by_sample[sample].max(split.end_pos());
+        }
+        if !(preserve_merged_hetalt_order && split.alt_allele.contains(',')) {
+            canonicalize_multi_allelic_order(&mut split);
+        }
+        canonicalize_legacy_genotypes(&mut split);
+        if split.qual.is_empty() || split.qual == "." {
+            split.qual = "0".to_string();
+        }
+        blank_secondary_sample_annotations(&mut split, ctx.args.bcf, ctx.string_format_fields);
+        reorder_format_fields(&mut split);
+        emit(vcf::ValidatedVcfRecord::try_from_raw(
+            split,
+            QueryProvenance::Unavailable,
+        )?)?;
     }
     Ok(())
 }

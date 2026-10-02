@@ -480,7 +480,7 @@ impl Iterator for LocationAggregatedRecords {
         let streams = streams
             .into_iter()
             .map(|(stream, records)| {
-                crate::engines::variant_pipeline::aggregate_location_records_with_successor(
+                crate::engines::variant_pipeline::aggregate_normalized_location_records(
                     records,
                     successor_stream == Some(stream),
                 )
