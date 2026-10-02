@@ -2,7 +2,7 @@
 
 use super::genotype::parse_gt_alleles;
 use super::{AnnotatedRow, Cluster, SPLIT_LEFT_SHIFT_WINDOW, Side, Variant, fp_class_from_bk};
-use crate::adapters::vcf::VariantKey;
+use crate::adapters::vcf::{self, VariantKey};
 use crate::domain::{ComparisonRecord, FpClass, RawVcfRecord, SortKey};
 use crate::engines::partial_credit;
 use std::borrow::Cow;
@@ -705,7 +705,12 @@ pub(super) fn split_query_primitives_with_neighbors(
     // Preprocessing has already applied VariantPrimitiveSplitter and
     // VariantLocationAggregator. Splitting the persisted query a second
     // time changes legacy row grain and double-counts real indels.
-    if persisted_query_representation_is_final(variant, cluster_neighbors) {
+    // Original xcmp.cpp (84011695, lines 292-311) reads pre.py's final
+    // records directly. VariantInput.cpp runs normalization, location
+    // aggregation, uniqueness and padding after primitive splitting. A
+    // completed aggregate is therefore final regardless of GT orientation
+    // or neighboring alleles (#91).
+    if variant.preparation == vcf::VariantPreparation::LocationAggregated {
         return vec![variant.clone()];
     }
     let alleles = parse_gt_alleles(&variant.gt);
@@ -778,6 +783,7 @@ pub(super) fn split_query_primitives_with_neighbors(
             return sorted
                 .into_iter()
                 .map(|(p, r, a)| Variant {
+                    preparation: variant.preparation,
                     key: VariantKey {
                         chrom: variant.key.chrom.clone(),
                         pos: p,
@@ -800,6 +806,7 @@ pub(super) fn split_query_primitives_with_neighbors(
         let mut alt_list: Vec<String> = trimmed.iter().map(|(_, _, alt)| alt.clone()).collect();
         alt_list.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
         return vec![Variant {
+            preparation: variant.preparation,
             key: VariantKey {
                 chrom: variant.key.chrom.clone(),
                 pos: *pos,
@@ -874,6 +881,7 @@ pub(super) fn split_query_primitives_with_neighbors(
                 (pos, ref_allele, alt_allele)
             };
             Variant {
+                preparation: variant.preparation,
                 key: VariantKey {
                     chrom: variant.key.chrom.clone(),
                     pos: final_pos,
@@ -889,40 +897,6 @@ pub(super) fn split_query_primitives_with_neighbors(
             }
         })
         .collect()
-}
-
-fn persisted_query_representation_is_final(
-    variant: &Variant,
-    cluster_neighbors: &[Variant],
-) -> bool {
-    let alts = variant.key.alt_allele.split(',').collect::<Vec<_>>();
-    let variant_end = variant.key.pos + variant.key.ref_allele.len().saturating_sub(1);
-    let has_overlapping_deletion = cluster_neighbors.iter().any(|neighbor| {
-        neighbor.key != variant.key
-            && neighbor
-                .key
-                .alt_allele
-                .split(',')
-                .any(|alt| neighbor.key.ref_allele.len() > alt.len())
-            && neighbor.key.pos <= variant_end
-            && neighbor.key.pos + neighbor.key.ref_allele.len().saturating_sub(1) >= variant.key.pos
-    });
-    variant.key.alt_allele.contains(',')
-        && (variant.gt == "2/1"
-            || (variant.gt == "1/2"
-                && has_overlapping_deletion
-                // DeepTrio's preprocessor has already joined an insertion
-                // and deletion at this anchor. The adjacent deletion must
-                // not trigger a second comparison-time primitive split.
-                && (alts
-                    .iter()
-                    .all(|alt| variant.key.ref_allele.len() > alt.len())
-                    || (alts
-                        .iter()
-                        .any(|alt| variant.key.ref_allele.len() > alt.len())
-                        && alts
-                            .iter()
-                            .any(|alt| variant.key.ref_allele.len() < alt.len())))))
 }
 
 /// Trim common prefix and suffix from (ref, alt) and re-anchor the
@@ -1272,6 +1246,7 @@ pub(super) fn subtype_label(variant: &Variant) -> Option<String> {
         for allele in used {
             let alt = *alts.get(allele.saturating_sub(1))?;
             let pseudo = Variant {
+                preparation: variant.preparation,
                 key: VariantKey {
                     chrom: variant.key.chrom.clone(),
                     pos: variant.key.pos,

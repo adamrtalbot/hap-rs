@@ -29,6 +29,16 @@ pub(crate) struct Variant {
     pub(crate) qual: String,
     pub(crate) filter: String,
     pub(crate) gt: String,
+    /// Internal state supplied by the producing pipeline, never inferred
+    /// from biological fields or serialized in the VCF.
+    pub(crate) preparation: VariantPreparation,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum VariantPreparation {
+    #[default]
+    Unprepared,
+    LocationAggregated,
 }
 
 impl Variant {
@@ -1208,6 +1218,7 @@ impl Iterator for VariantReader<'_> {
                 gt
             };
             let variant = Variant {
+                preparation: Default::default(),
                 key: VariantKey {
                     chrom,
                     pos: record.raw().pos,

@@ -299,24 +299,24 @@ fn observe_following_spanning_deletions(
 }
 
 pub(crate) fn run(args: ValidatedPreprocessArgs) -> Result<()> {
-    run_with_optional_reference(args, None)
+    run_with_optional_reference(args, None).map(|_| ())
 }
 
 pub(crate) fn run_with_reference(
     args: ValidatedPreprocessArgs,
     reference_sequences: &std::collections::BTreeMap<String, String>,
-) -> Result<()> {
+) -> Result<vcf::VariantPreparation> {
     run_with_optional_reference(args, Some(reference_sequences))
 }
 
 fn run_with_optional_reference(
     args: ValidatedPreprocessArgs,
     reference_sequences: Option<&std::collections::BTreeMap<String, String>>,
-) -> Result<()> {
+) -> Result<vcf::VariantPreparation> {
     let mut args = args.into_inner();
     if args.version {
         println!("{}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
+        return Ok(vcf::VariantPreparation::Unprepared);
     }
     // The reference is an argument: fail before any output path is staged.
     resolve_reference(args.reference.as_deref())?;
@@ -348,19 +348,22 @@ fn run_with_optional_reference(
             output_path.display()
         )
     });
-    if let Err(error) = outcome {
-        if output_path.extension().and_then(|value| value.to_str()) == Some("vcf")
-            && staged_output.is_file()
-        {
-            transaction.commit().with_context(|| {
-                format!(
-                    "failed to publish legacy unindexed VCF {}",
-                    output_path.display()
-                )
-            })?;
+    let preparation = match outcome {
+        Ok(preparation) => preparation,
+        Err(error) => {
+            if output_path.extension().and_then(|value| value.to_str()) == Some("vcf")
+                && staged_output.is_file()
+            {
+                transaction.commit().with_context(|| {
+                    format!(
+                        "failed to publish legacy unindexed VCF {}",
+                        output_path.display()
+                    )
+                })?;
+            }
+            return Err(error);
         }
-        return Err(error);
-    }
+    };
     if !index_path.as_os_str().is_empty() {
         let produced_index =
             if output_path.extension().and_then(|value| value.to_str()) == Some("bcf") {
@@ -377,7 +380,8 @@ fn run_with_optional_reference(
             )
         })?;
     }
-    transaction.commit()
+    transaction.commit()?;
+    Ok(preparation)
 }
 
 fn preprocess_output_path(args: &PreprocessArgs) -> PathBuf {
@@ -400,7 +404,7 @@ fn preprocess_inputs(args: &PreprocessArgs) -> Vec<PathBuf> {
 fn run_inner(
     args: PreprocessArgs,
     shared_reference_sequences: Option<&std::collections::BTreeMap<String, String>>,
-) -> Result<()> {
+) -> Result<vcf::VariantPreparation> {
     let phase_started = std::time::Instant::now();
     let mut logger = PreprocessLogger::new(&args)?;
     logger.info(&format!("Preprocessing {}", args.input))?;
@@ -742,7 +746,11 @@ fn run_inner(
         output_count,
         output_path.display()
     ))?;
-    Ok(())
+    Ok(if normalization_enabled {
+        vcf::VariantPreparation::LocationAggregated
+    } else {
+        vcf::VariantPreparation::Unprepared
+    })
 }
 
 fn report_phase(name: &str, started: std::time::Instant) {

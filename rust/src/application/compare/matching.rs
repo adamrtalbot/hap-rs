@@ -2215,6 +2215,7 @@ pub(super) fn split_matched_deletion_aggregate(
         return None;
     }
     let make = |gt: &str| Variant {
+        preparation: query.preparation,
         key: VariantKey {
             chrom: query.key.chrom.clone(),
             pos: query.key.pos,
@@ -2823,6 +2824,7 @@ pub(super) fn exact_match_pairs(
                 // Emit at truth's representation; remap query GT so
                 // alleles missing from truth's column collapse to ref.
                 let canonicalized = Variant {
+                    preparation: query_for_output.preparation,
                     key: VariantKey {
                         chrom: query_for_output.key.chrom.clone(),
                         pos: query_for_output.key.pos,
@@ -2924,6 +2926,7 @@ pub(super) fn exact_match_pairs(
                         (tpos, tref, talt)
                     };
                     residual_queries.push(Variant {
+                        preparation: query.preparation,
                         key: VariantKey {
                             chrom: query.key.chrom.clone(),
                             pos: rpos,
@@ -2951,6 +2954,7 @@ pub(super) fn exact_match_pairs(
                         canonical_hetalt_gt(&truth.key.alt_allele, query_for_output)
                     };
                     Variant {
+                        preparation: query_for_output.preparation,
                         key: query_for_output.key.clone(),
                         qual: query_for_output.qual.clone(),
                         filter: query_for_output.filter.clone(),
@@ -2989,6 +2993,7 @@ pub(super) fn exact_match_pairs(
                 // already alpha-sorted). Truth GT is always printed
                 // verbatim under truth's displayed alt ordering.
                 let canonicalized = Variant {
+                    preparation: query_for_output.preparation,
                     key: VariantKey {
                         chrom: query_for_output.key.chrom.clone(),
                         pos: query_for_output.key.pos,
@@ -3557,6 +3562,7 @@ pub(super) fn mark_cluster_mismatch(
             remap_query_gt_subset(truth, query_for_output)
         };
         let query_for_row = Variant {
+            preparation: query_for_output.preparation,
             key: truth.key.clone(),
             qual: query_for_output.qual.clone(),
             filter: query_for_output.filter.clone(),
@@ -3854,6 +3860,7 @@ pub(super) fn split_query_mismatch_rows(
     for allele in used {
         let alt = *alts.get(allele - 1)?;
         let pseudo = Variant {
+            preparation: query.preparation,
             key: VariantKey {
                 chrom: query.key.chrom.clone(),
                 pos: query.key.pos,
