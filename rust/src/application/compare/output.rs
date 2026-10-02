@@ -461,6 +461,7 @@ pub(super) fn legacy_mismatch_kind<'a>(
 
 pub(super) fn legacy_regions_extent(record: &RawVcfRecord) -> String {
     let variant = Variant {
+        preparation: Default::default(),
         key: VariantKey {
             chrom: record.chrom.clone(),
             pos: record.pos,

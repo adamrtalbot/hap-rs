@@ -779,7 +779,7 @@ fn run_inner(
     });
     log_compare_info(&args, "Preprocessing truth")?;
     let truth_preprocess_started = std::time::Instant::now();
-    preprocess::run_with_reference(
+    let truth_preparation = preprocess::run_with_reference(
         build_preprocess_args(
             &preprocessing_args,
             &args.truth,
@@ -806,7 +806,7 @@ fn run_inner(
     }
     log_compare_info(&args, "Preprocessing query")?;
     let query_preprocess_started = std::time::Instant::now();
-    preprocess::run_with_reference(
+    let query_preparation = preprocess::run_with_reference(
         build_preprocess_args(
             &preprocessing_args,
             &args.query,
@@ -942,7 +942,13 @@ fn run_inner(
         regions.as_deref(),
         targets.as_deref(),
         comparison_locations,
-    )?;
+    )?
+    .map(|result| {
+        result.map(|mut variant| {
+            variant.preparation = truth_preparation;
+            variant
+        })
+    });
     let query = vcf::open_variants(
         &query_prep,
         &contig_set,
@@ -950,7 +956,13 @@ fn run_inner(
         regions.as_deref(),
         targets.as_deref(),
         comparison_locations,
-    )?;
+    )?
+    .map(|result| {
+        result.map(|mut variant| {
+            variant.preparation = query_preparation;
+            variant
+        })
+    });
     let contig_ranks = comparison_contig_ranks(&truth_headers, &query_headers);
     let clusters = StreamingClusters::new(truth, query, cluster_gap, contig_ranks);
     let mut contigs_in_play = comparison_locations
@@ -1387,6 +1399,7 @@ fn run_vcfeval(
                     ref_allele = String::from_utf8_lossy(slice).to_ascii_uppercase();
                 }
                 Ok(Variant {
+                    preparation: Default::default(),
                     key: VariantKey {
                         chrom: record.chrom,
                         pos: record.pos,

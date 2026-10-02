@@ -63,6 +63,49 @@ mod scratch_tests {
     }
 
     #[test]
+    fn prepared_aggregate_survives_vcf_and_bcf_handoffs() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("verification/assets/fixtures/prepared-aggregate");
+        for (bcf, threads) in [(false, 1), (true, 2)] {
+            let root = test_root("prepared-aggregate");
+            let prefix = root.join("result");
+            let mut options = CompareArgs::with_paths(
+                fixture.join("truth.vcf").display().to_string(),
+                fixture.join("query.vcf").display().to_string(),
+                fixture.join("ref.fa").display().to_string(),
+                prefix.display().to_string(),
+            );
+            options.fp_bedfile = Some(fixture.join("conf.bed").display().to_string());
+            options.preprocess.no_fixchr = true;
+            options.threads = Some(threads);
+            options.bcf = bcf;
+            options.roc.no_roc = true;
+            options.no_json = true;
+            options.no_write_counts = true;
+            run_args(options).unwrap();
+
+            let summary = fs::read_to_string(suffixed_report_path(&prefix, "summary.csv")).unwrap();
+            for filter in ["ALL", "PASS"] {
+                assert!(
+                    summary
+                        .lines()
+                        .any(|line| line.starts_with(&format!("INDEL,{filter},0,0,0,1,0,1,"))),
+                    "{summary}"
+                );
+            }
+            let suffix = if bcf { "bcf" } else { "vcf.gz" };
+            let (_, records) = vcf::load_raw_vcf(&suffixed_report_path(&prefix, suffix)).unwrap();
+            assert_eq!(records.len(), 3);
+            let aggregate = &records[2];
+            assert_eq!(aggregate.pos, 32);
+            assert_eq!(aggregate.ref_allele, "GG");
+            assert_eq!(aggregate.alt_allele, "G,GGTGTG");
+            assert_eq!(aggregate.samples[1], "1/2:UNK:lm:d1_5,i1_5:INDEL:hetalt:30");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn chr10_compound_block_keeps_truth_deletion_unmatched() {
         let fixture =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chr10-compound-block");
@@ -1077,6 +1120,7 @@ mod memory_guards {
 
     fn het(gt: &str) -> Variant {
         Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos: 10,
@@ -1163,6 +1207,7 @@ mod memory_guards {
         let mut truth = Vec::new();
         for offset in 0..(MAX_CLUSTER_VARIANTS + 2) {
             truth.push(Variant {
+                preparation: Default::default(),
                 key: VariantKey {
                     chrom: "chr1".to_string(),
                     pos: 100 + offset,
@@ -1273,6 +1318,7 @@ mod memory_guards {
 
     fn variant(pos: usize, r: &str, alt: &str, gt: &str) -> Variant {
         Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos,
@@ -2042,6 +2088,7 @@ mod memory_guards {
     #[test]
     fn comparison_info_joins_multi_allelic_snp_ti_tv() {
         let var = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 17562906,
@@ -3016,6 +3063,7 @@ mod memory_guards {
     #[test]
     fn symbolic_output_ref_uses_the_reference_base() {
         let variant = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 2,
@@ -3039,6 +3087,7 @@ mod memory_guards {
     #[test]
     fn variant_is_conf_rejects_insertion_at_bed_edge() {
         let var = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 15859667,
@@ -3074,6 +3123,7 @@ mod memory_guards {
     #[test]
     fn region_state_marks_multi_allelic_primitives_separately() {
         let parent = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 100,
@@ -3125,8 +3175,35 @@ mod memory_guards {
     }
 
     #[test]
+    fn prepared_aggregates_keep_genotype_orientation_without_neighbors() {
+        for gt in ["1/2", "2/1", "1|2", "2|1"] {
+            let mut aggregate = variant(32, "GG", "G,GGTGTG", gt);
+            aggregate.preparation = vcf::VariantPreparation::LocationAggregated;
+            let split = split_query_primitives_with_neighbors(&aggregate, "N", 4, &[], &[]);
+            assert_eq!(split.len(), 1, "{gt}");
+            assert_eq!(split[0].key, aggregate.key, "{gt}");
+            assert_eq!(split[0].gt, gt);
+        }
+    }
+
+    #[test]
+    fn unprepared_multiallelics_still_split_independently_of_gt_orientation() {
+        for gt in ["1/2", "2/1", "1|2", "2|1"] {
+            let aggregate = variant(32, "GG", "G,GGTGTG", gt);
+            let split = split_query_primitives_with_neighbors(&aggregate, "N", 4, &[], &[]);
+            assert_eq!(split.len(), 2, "{gt}");
+            assert!(
+                split
+                    .iter()
+                    .all(|primitive| !primitive.key.alt_allele.contains(','))
+            );
+        }
+    }
+
+    #[test]
     fn overlapping_deletion_keeps_persisted_hetalt_deletion_aggregate_final() {
-        let aggregate = variant(100, "CTCAACTAG", "C,CT", "1/2");
+        let mut aggregate = variant(100, "CTCAACTAG", "C,CT", "1/2");
+        aggregate.preparation = vcf::VariantPreparation::LocationAggregated;
         let neighbor = variant(101, "TCAACTAGTTAAG", "T", "0/1");
 
         let split = split_query_primitives_with_neighbors(
@@ -3160,6 +3237,7 @@ mod memory_guards {
             let ref_allele = if chrom == "chr10" { "GG" } else { "AA" };
             let mut aggregate = variant(100, ref_allele, alternate, "1/2");
             aggregate.key.chrom = chrom.to_string();
+            aggregate.preparation = vcf::VariantPreparation::LocationAggregated;
             let mut neighbor = variant(101, neighbor_ref, &neighbor_ref[..1], "0/1");
             neighbor.key.chrom = chrom.to_string();
             let split = split_query_primitives_with_neighbors(
@@ -3255,7 +3333,8 @@ mod memory_guards {
 
     #[test]
     fn normative_duplicate_alt_matching_representation_remains_distinct() {
-        let aggregate = variant(141113704, "A", "AGTGTGTGT,AGTGTGTGT", "2/1");
+        let mut aggregate = variant(141113704, "A", "AGTGTGTGT,AGTGTGTGT", "2/1");
+        aggregate.preparation = vcf::VariantPreparation::LocationAggregated;
 
         let split = split_query_primitives_with_neighbors(
             &aggregate,
@@ -3292,6 +3371,7 @@ mod memory_guards {
     #[test]
     fn variant_is_conf_accepts_snp_inside_interval() {
         let var = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 15859632,
@@ -3320,6 +3400,7 @@ mod memory_guards {
     #[test]
     fn gvcf2bed_padding_spans_insertion_anchor_and_next_base() {
         let truth = vec![Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 17562905,
@@ -3350,6 +3431,7 @@ mod memory_guards {
         let truth = vec![
             // pos 100 → pos_0b 99, INSIDE conf [50, 150)
             Variant {
+                preparation: Default::default(),
                 key: VariantKey {
                     chrom: "chr1".to_string(),
                     pos: 100,
@@ -3362,6 +3444,7 @@ mod memory_guards {
             },
             // pos 200 → pos_0b 199, OUTSIDE conf — should be dropped
             Variant {
+                preparation: Default::default(),
                 key: VariantKey {
                     chrom: "chr1".to_string(),
                     pos: 200,
@@ -3394,6 +3477,7 @@ mod memory_guards {
     #[test]
     fn gvcf2bed_padding_emits_symbolic_only_record_with_raw_ref_span() {
         let truth = vec![Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 15847471, // 1-based — pos_0b = 15847470
@@ -3423,6 +3507,7 @@ mod memory_guards {
         ]
         .into_iter()
         .map(|(pos, reference, alternate)| Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos,
@@ -3463,6 +3548,7 @@ mod memory_guards {
     #[test]
     fn canonical_hetalt_gt_snp_canonical_swap() {
         let query = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 18280183,
@@ -3479,6 +3565,7 @@ mod memory_guards {
     #[test]
     fn canonical_hetalt_gt_indel_noncanonical_verbatim() {
         let query = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 21189041,
@@ -3496,6 +3583,7 @@ mod memory_guards {
     fn canonical_hetalt_gt_reordered_same_set() {
         // Truth A→ATT,AT vs query A→AT,ATT 1/2 → output 1/2 (ATT later).
         let query = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 15712678,
@@ -3513,6 +3601,7 @@ mod memory_guards {
     fn canonical_hetalt_gt_reordered_set_swap() {
         // Truth C→CA,CAA vs query C→CAA,CA 1/2 → output 2/1.
         let query = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 16032497,
@@ -3567,6 +3656,7 @@ mod memory_guards {
         reference[6] = b'T'; // pos 7
         let reference = String::from_utf8(reference).unwrap();
         let var1 = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos: 5,
@@ -3578,6 +3668,7 @@ mod memory_guards {
             gt: "1/1".to_string(),
         };
         let var2 = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos: 6,
@@ -3618,6 +3709,7 @@ mod memory_guards {
     #[test]
     fn cluster_query_filter_sorts_aggregated_tokens() {
         let mk = |pos: usize, filter: &str| Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos,
@@ -3672,6 +3764,7 @@ mod memory_guards {
     #[test]
     fn deletion_covers_insert_no_proximate_truth_returns_none() {
         let q_del = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 44049606,
@@ -3683,6 +3776,7 @@ mod memory_guards {
             gt: "1/1".to_string(),
         };
         let q_multi = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 44049615,
@@ -3694,6 +3788,7 @@ mod memory_guards {
             gt: "1/2".to_string(),
         };
         let truth_far = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 44049663,
@@ -3721,6 +3816,7 @@ mod memory_guards {
     #[test]
     fn deletion_covers_insert_truth_at_anchor_returns_some_false() {
         let q_del = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos: 100,
@@ -3733,6 +3829,7 @@ mod memory_guards {
         };
         // Multi-allelic with a 16-base alt → registers as `insert` at pos 105.
         let q_multi = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos: 105,
@@ -3744,6 +3841,7 @@ mod memory_guards {
             gt: "1/2".to_string(),
         };
         let truth_at_anchor = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos: 105,
@@ -3770,6 +3868,7 @@ mod memory_guards {
     #[test]
     fn deletion_covers_insert_truth_in_del_range_returns_some_false() {
         let q_del = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos: 100,
@@ -3781,6 +3880,7 @@ mod memory_guards {
             gt: "1/1".to_string(),
         };
         let q_multi = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos: 105,
@@ -3793,6 +3893,7 @@ mod memory_guards {
         };
         // Truth variant at pos 107 — inside the deletion's [101, 110] range.
         let truth_in_range = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr1".to_string(),
                 pos: 107,
@@ -4001,6 +4102,7 @@ mod memory_guards {
     fn class_f_region_state_skips_parent_path_for_fanned_out_multiallelic() {
         let reference = "aaaaaaaaaaaaaaaaaaaaagaactaaagt".to_string();
         let parent = Variant {
+            preparation: Default::default(),
             key: VariantKey {
                 chrom: "chr21".to_string(),
                 pos: 21,
