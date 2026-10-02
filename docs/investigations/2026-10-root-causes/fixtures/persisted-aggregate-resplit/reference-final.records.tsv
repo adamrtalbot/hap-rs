@@ -1,3 +1,0 @@
-chr10	4	.	A	C	60	.	BS=4;Regions=CONF,TS_boundary	GT:BD:BK:BI:BVT:BLT:QQ	0/1:FN:lm:tv:SNP:het:.	./.:.:.:.:NOCALL:nocall:0
-chr10	32	.	G	T	30	.	BS=4;Regions=TS_boundary	GT:BD:BK:BI:BVT:BLT:QQ	./.:.:.:.:NOCALL:nocall:.	1/0:UNK:lm:tv:SNP:het:30
-chr10	32	.	GG	G,GGTGTG	30	.	BS=4;Regions=TS_boundary	GT:BD:BK:BI:BVT:BLT:QQ	./.:.:.:.:NOCALL:nocall:.	1/2:UNK:lm:d1_5,i1_5:INDEL:hetalt:30
