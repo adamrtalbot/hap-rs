@@ -42,6 +42,11 @@ use std::collections::BTreeMap;
 type TaggedPrimitive = (RefVar, bool);
 type AllelePrimitives = (usize, bool, Vec<TaggedPrimitive>);
 
+pub(crate) struct PrimitiveGroupContext {
+    pub has_complex_allele: bool,
+    pub normalization_floor: usize,
+}
+
 /// Decompose any multi-allelic indel record into primitive per-position
 /// records and re-aggregate primitives that land at the same position.
 ///
@@ -69,12 +74,34 @@ fn primitive_split_with_floor(
     primitive_split_with_context(record, reference, previous_end, false, false)
 }
 
-pub(crate) fn primitive_split_with_context(
+#[cfg(test)]
+fn primitive_split_with_context(
     record: &RawVcfRecord,
     reference: &[u8],
     previous_end: usize,
     has_following_spanning_deletion: bool,
     equal_floor_blocked: bool,
+) -> Vec<RawVcfRecord> {
+    primitive_split_with_group_context(
+        record,
+        reference,
+        previous_end,
+        has_following_spanning_deletion,
+        equal_floor_blocked,
+        PrimitiveGroupContext {
+            has_complex_allele: false,
+            normalization_floor: previous_end,
+        },
+    )
+}
+
+pub(crate) fn primitive_split_with_group_context(
+    record: &RawVcfRecord,
+    reference: &[u8],
+    previous_end: usize,
+    has_following_spanning_deletion: bool,
+    equal_floor_blocked: bool,
+    group: PrimitiveGroupContext,
 ) -> Vec<RawVcfRecord> {
     let alts: Vec<&str> = record.alt_allele.split(',').collect();
 
@@ -82,7 +109,12 @@ pub(crate) fn primitive_split_with_context(
     // pass through unchanged. Same-direction multi-allelic insertions like
     // `T → TG,TTG` also fall here unless an allele is itself complex
     // (reflen > 1 && altlen > 1) — same-position primitives re-merge below.
-    if !needs_primitive_split(record, &alts) {
+    let padded_insertion = group.has_complex_allele
+        && record.ref_allele.len() > 1
+        && alts.iter().any(|alt| {
+            alt.len() > record.ref_allele.len() && !allele_has_mixed_edit(&record.ref_allele, alt)
+        });
+    if !needs_primitive_split(record, &alts) && !padded_insertion {
         let mut passthrough = record.clone();
         if alts.len() == 1 {
             passthrough.primitive_identity = Some(PrimitiveIdentity {
@@ -108,7 +140,7 @@ pub(crate) fn primitive_split_with_context(
         primitives.push((
             idx,
             allele_has_mixed_edit(&record.ref_allele, alt),
-            allele_primitives(record, alt, reference),
+            allele_primitives(record, alt, reference, padded_insertion),
         ));
     }
 
@@ -195,7 +227,7 @@ pub(crate) fn primitive_split_with_context(
         })
         .map(|(snp, _, allele_idx)| (*allele_idx, snp.pos))
         .collect::<Vec<_>>();
-    let mut current_maxpos = previous_end;
+    let mut current_maxpos = group.normalization_floor;
     for (rec, mixed, allele_idx) in &mut output {
         // Keep a mixed indel beside a SNP from the same source allele when
         // they share an anchor. Also retain non-indels and deletion anchors
@@ -218,7 +250,7 @@ pub(crate) fn primitive_split_with_context(
                     .iter()
                     .any(|(snp_idx, snp_pos)| snp_idx != allele_idx && rec.pos == *snp_pos)
             {
-                previous_end
+                group.normalization_floor
             } else {
                 current_maxpos
             };
@@ -413,6 +445,13 @@ fn needs_primitive_split(record: &RawVcfRecord, alts: &[&str]) -> bool {
     has_multi_indel || has_complex
 }
 
+pub(crate) fn record_has_complex_allele(record: &RawVcfRecord) -> bool {
+    record
+        .alt_allele
+        .split(',')
+        .any(|alt| allele_has_mixed_edit(&record.ref_allele, alt))
+}
+
 fn allele_has_mixed_edit(reference: &str, alternate: &str) -> bool {
     if reference.len() <= 1 && alternate.len() <= 1 {
         return false;
@@ -441,7 +480,12 @@ fn allele_has_mixed_edit(reference: &str, alternate: &str) -> bool {
 /// convention. Mirrors the per-allele body of
 /// `VariantPrimitiveSplitter::advance` plus its post-trim realign-or-passthrough
 /// guard (`src/c++/lib/variant/VariantPrimitiveSplitter.cpp:135-178`).
-fn allele_primitives(record: &RawVcfRecord, alt: &str, reference: &[u8]) -> Vec<(RefVar, bool)> {
+fn allele_primitives(
+    record: &RawVcfRecord,
+    alt: &str,
+    reference: &[u8],
+    padded_insertion: bool,
+) -> Vec<(RefVar, bool)> {
     let original = RefVar {
         start: record.pos,
         end: record.pos + record.ref_allele.len().saturating_sub(1),
@@ -471,7 +515,16 @@ fn allele_primitives(record: &RawVcfRecord, alt: &str, reference: &[u8]) -> Vec<
     } else {
         // Pass the ORIGINAL untrimmed RefVar through — leftshift in stage 6
         // handles its trim-and-slide differently than this pre-check would.
-        vec![(original, false)]
+        if padded_insertion
+            && !record.alt_allele.contains(',')
+            && record.ref_allele.len() > 1
+            && reflen == 0
+            && altlen > 0
+        {
+            vec![(probe, false)]
+        } else {
+            vec![(original, false)]
+        }
     }
 }
 
@@ -908,11 +961,21 @@ pub(crate) fn aggregate_location_records(records: Vec<RawVcfRecord>) -> Vec<RawV
 /// sits at the deletion's first deleted base (anchor + 1). Measured against the
 /// pinned hap.py 0.3.15 aggregator: chr1:152194725 (no anchor+1 record) merges,
 /// chr11:95814076 (a record at anchor+1) stays split.
-pub(crate) fn aggregate_location_records_with_successor(
+#[cfg(test)]
+fn aggregate_location_records_with_successor(
     records: Vec<RawVcfRecord>,
     successor_present: bool,
 ) -> Vec<RawVcfRecord> {
     aggregate_location_records_inner(records, false, successor_present)
+}
+
+/// Consume the ordered normalizer stream without reordering a pair of calls
+/// by its final padded VCF spelling.
+pub(crate) fn aggregate_normalized_location_records(
+    records: Vec<RawVcfRecord>,
+    successor_present: bool,
+) -> Vec<RawVcfRecord> {
+    aggregate_location_records_inner(records, true, successor_present)
 }
 
 /// One reference base replaced by one alternate base: the aggregator classes
@@ -953,7 +1016,7 @@ fn aggregate_location_records_inner(
                 && !snp_keys.insert((record.ref_allele.as_str(), record.alt_allele.as_str()))
         });
         let preserve_sorted_pair_order =
-            has_insertion && has_deletion && has_snp && has_duplicate_snp;
+            preserve_pair_order || (has_insertion && has_deletion && has_snp && has_duplicate_snp);
         if has_insertion && has_deletion && has_snp && !has_duplicate_snp {
             records.sort_by_key(|record| usize::from(!record_is_snp(record)));
         } else if !(has_insertion && has_deletion) || preserve_sorted_pair_order {

@@ -2007,6 +2007,75 @@ mod tests {
     }
 
     #[test]
+    fn decomposed_calls_bound_equivalent_insertion_padding() -> Result<()> {
+        let directory = tempdir()?;
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("verification/assets/fixtures/pre-decomposed-shift-floor");
+        let reference = fixture.join("ref.fa");
+        let snp = "chr10\t32\t.\tG\tT\t30\t.\t.\tGT:AD:ADO:DP\t1/0:.,.:0:0";
+        let aggregate = "chr10\t32\t.\tGG\tG,GGTGTG\t30\t.\t.\tGT:AD:ADO:DP\t1/2:.,.,.:0:0";
+        for (name, expected) in [
+            ("input", vec![snp, aggregate]),
+            ("reversed", vec![snp, aggregate]),
+            ("single-record", vec![snp, aggregate]),
+            (
+                "insertion-only",
+                vec!["chr10\t32\t.\tG\tGGTGT\t30\t.\t.\tGT:AD:ADO:DP\t0/1:.,.:0:0"],
+            ),
+            (
+                "pretrimmed",
+                vec![
+                    snp,
+                    "chr10\t32\t.\tGG\tGGTGTG,G\t30\t.\t.\tGT:AD:ADO:DP\t2/1:.,.,.:0:0",
+                ],
+            ),
+            (
+                "snp-constraint",
+                vec![
+                    "chr10\t32\t.\tG\tT\t30\t.\t.\tGT:AD:ADO:DP\t0/1:.,.:0:0",
+                    "chr10\t33\t.\tG\tGTGTG\t30\t.\t.\tGT:AD:ADO:DP\t0/1:.,.:0:0",
+                ],
+            ),
+            (
+                "snp-constraint-reversed",
+                vec![
+                    "chr10\t32\t.\tG\tT\t30\t.\t.\tGT:AD:ADO:DP\t0/1:.,.:0:0",
+                    "chr10\t33\t.\tG\tGTGTG\t30\t.\t.\tGT:AD:ADO:DP\t0/1:.,.:0:0",
+                ],
+            ),
+            (
+                "duplicate-insertion",
+                vec![
+                    "chr10\t32\t.\tG\tGGTGT\t30\t.\t.\tGT:AD:ADO:DP\t0/1:.,.:0:0",
+                    "chr10\t33\t.\tG\tGTGTG\t30\t.\t.\tGT:AD:ADO:DP\t0/1:.,.:0:0",
+                ],
+            ),
+        ] {
+            for threads in [1, 2] {
+                let output = directory.path().join(format!("{name}-{threads}.vcf.gz"));
+                let mut args = interval_args(
+                    &fixture.join(format!("{name}.vcf")),
+                    &output,
+                    &reference,
+                    None,
+                    None,
+                );
+                args.decompose = true;
+                args.gender = PreprocessGender::None;
+                args.threads = Some(threads);
+                run(args)?;
+                let (_, records) = vcf::load_raw_vcf(&output)?;
+                let lines = records
+                    .iter()
+                    .map(RawVcfRecord::to_line)
+                    .collect::<Vec<_>>();
+                assert_eq!(lines, expected, "{name}, threads={threads}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn distinct_internal_edits_can_serialize_as_duplicate_alleles() -> Result<()> {
         let directory = tempdir()?;
         let input = directory.path().join("input.vcf");
@@ -2227,33 +2296,28 @@ mod tests {
     }
 
     #[test]
-    fn left_shift_barrier_classification() {
-        // Pure insertions and pure deletions leave their anchor base intact, so
-        // they never floor a colocated indel — that is what lets a het
-        // insertion + het deletion slide to a shared anchor and re-merge.
+    fn substitution_classification_for_deletion_context() {
+        // The deletion-context pre-scan distinguishes substitutions from
+        // pure indels. Shift boundaries are determined later by the ordered
+        // normalized calls, rather than this raw-allele classification.
         let insertion = record_at(41, "A", "AA");
-        assert!(record_is_pure_insertion(&insertion));
         assert!(!record_is_substitution(&insertion));
 
         let deletion = record_at(41, "AAAA", "A");
-        assert!(!record_is_pure_insertion(&deletion));
         assert!(!record_is_substitution(&deletion));
 
         // A substitution changes an existing base, so it blocks a colocated
         // deletion's left-shift (chr21:9920194's SNP over the deletion).
         let snp = record_at(9_920_194, "A", "C");
-        assert!(!record_is_pure_insertion(&snp));
         assert!(record_is_substitution(&snp));
 
         // A complex allele that both trims and changes a base is a barrier.
         let complex = record_at(10, "ATC", "GC");
-        assert!(!record_is_pure_insertion(&complex));
         assert!(record_is_substitution(&complex));
 
         // Multi-allelic: a single substitution ALT makes the record a barrier
         // even when another ALT is a clean insertion.
         let mixed = record_at(10, "A", "AA,C");
-        assert!(!record_is_pure_insertion(&mixed));
         assert!(record_is_substitution(&mixed));
     }
 
