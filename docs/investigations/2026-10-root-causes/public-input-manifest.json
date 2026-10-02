@@ -1,0 +1,103 @@
+{
+  "metadata_source": "https://data.nist.gov/od/id/mds2-2336",
+  "retrieved_utc": "2026-10-02",
+  "note": "NIST metadata values; underlying query files were not retrieved or independently hash-verified in this investigation.",
+  "queries": [
+    {
+      "filepath": "submission_vcfs/FFFGB/FFFGB_HG003.vcf.gz",
+      "downloadURL": "https://data.nist.gov/od/ds/ark:/88434/mds2-2336/submission_vcfs/FFFGB/FFFGB_HG003.vcf.gz",
+      "size": 81015553,
+      "checksum": {
+        "hash": "d34ed79674c2710d5475f07e0d929efe1971fb192dcd3be962e1820b706c0f87",
+        "algorithm": {
+          "tag": "sha256",
+          "@type": "Thing"
+        }
+      }
+    },
+    {
+      "filepath": "submission_vcfs/XV7ZN/XV7ZN_HG003.vcf.gz",
+      "downloadURL": "https://data.nist.gov/od/ds/ark:/88434/mds2-2336/submission_vcfs/XV7ZN/XV7ZN_HG003.vcf.gz",
+      "size": 46835217,
+      "checksum": {
+        "hash": "65874bf2e6049f85df0d02981835891ae2b1c6b12bbc9e370e3100a30d5788d6",
+        "algorithm": {
+          "tag": "sha256",
+          "@type": "Thing"
+        }
+      }
+    },
+    {
+      "filepath": "submission_vcfs/KXBR8/KXBR8_HG003.vcf.gz",
+      "downloadURL": "https://data.nist.gov/od/ds/ark:/88434/mds2-2336/submission_vcfs/KXBR8/KXBR8_HG003.vcf.gz",
+      "size": 328676968,
+      "checksum": {
+        "hash": "b3f5bf69b673fb040c6fa50dd858222000d40875737f3046d7bb86255e52fb0f",
+        "algorithm": {
+          "tag": "sha256",
+          "@type": "Thing"
+        }
+      }
+    },
+    {
+      "filepath": "submission_vcfs/W607K/W607K_HG003.vcf.gz",
+      "downloadURL": "https://data.nist.gov/od/ds/ark:/88434/mds2-2336/submission_vcfs/W607K/W607K_HG003.vcf.gz",
+      "size": 321155981,
+      "checksum": {
+        "hash": "27eb8e8031e71d2c6565ac9d5ebc9f102063de3483357e2009d2209c48831304",
+        "algorithm": {
+          "tag": "sha256",
+          "@type": "Thing"
+        }
+      }
+    },
+    {
+      "filepath": "submission_vcfs/BSODP/BSODP_HG003.vcf.gz",
+      "downloadURL": "https://data.nist.gov/od/ds/ark:/88434/mds2-2336/submission_vcfs/BSODP/BSODP_HG003.vcf.gz",
+      "size": 132437569,
+      "checksum": {
+        "hash": "76e1e001abadd7d8e5e987ecefbe12d5fa01c367a4d0fa4e4ede27814af1b48e",
+        "algorithm": {
+          "tag": "sha256",
+          "@type": "Thing"
+        }
+      }
+    },
+    {
+      "filepath": "submission_vcfs/S7K7S/S7K7S_HG003.vcf.gz",
+      "downloadURL": "https://data.nist.gov/od/ds/ark:/88434/mds2-2336/submission_vcfs/S7K7S/S7K7S_HG003.vcf.gz",
+      "size": 419874259,
+      "checksum": {
+        "hash": "e868ab3c497285cc660683dff8a4515953f1bb5ea772d497d3cac66f3c93852f",
+        "algorithm": {
+          "tag": "sha256",
+          "@type": "Thing"
+        }
+      }
+    },
+    {
+      "filepath": "submission_vcfs/UYMUW/UYMUW_HG003.vcf.gz",
+      "downloadURL": "https://data.nist.gov/od/ds/ark:/88434/mds2-2336/submission_vcfs/UYMUW/UYMUW_HG003.vcf.gz",
+      "size": 283237847,
+      "checksum": {
+        "hash": "6e4424cfd6b426f4d2993fc3825c20926999a95f2156b18b958ab85b7f001290",
+        "algorithm": {
+          "tag": "sha256",
+          "@type": "Thing"
+        }
+      }
+    },
+    {
+      "filepath": "submission_vcfs/4HL0B/4HL0B_HG003.vcf.gz",
+      "downloadURL": "https://data.nist.gov/od/ds/ark:/88434/mds2-2336/submission_vcfs/4HL0B/4HL0B_HG003.vcf.gz",
+      "size": 422381613,
+      "checksum": {
+        "hash": "ed5f7702ea16c1e8b63dd1eed697fa87fce6419bd4d5abc912ab3fdf611d8e0f",
+        "algorithm": {
+          "tag": "sha256",
+          "@type": "Thing"
+        }
+      }
+    }
+  ]
+}

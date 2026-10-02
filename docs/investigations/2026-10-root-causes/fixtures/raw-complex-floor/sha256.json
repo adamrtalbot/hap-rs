@@ -1,0 +1,10 @@
+{
+  "reference-pre.records.tsv": "5abd2d105057993e3428ec9520fe7522158ae7077ad282b231def167b1239120",
+  "native-pre.records.tsv": "8dd4da94ce8e81aab0f6c42a301eaec30054f73073f520dda1506901ac444c33",
+  "pretrimmed.vcf": "2fe2d76b0176babd9730ffa37ef9a146584a9e1aca25fb35c86b4ed1a9ba3352",
+  "reversed.vcf": "74c1ac11066c03d4ae19c1faa8fc6c10d9852d0d5af746c2d3dffc46c963afb7",
+  "insertion-only.vcf": "784b7c356b1fb66f136428122815f1c9f9be0c2398ff0677ef617e91793dda1c",
+  "query.vcf": "1d094f717b7035d4b0852f5db430c123b198f3c1d495e8bd82d9abbcaddd8bcb",
+  "ref.fa.fai": "ac71a8777dfa2c20457135249f199f479c32b500cfb40ea1bb044aada0b254f3",
+  "ref.fa": "2dd6e0a5a93868916d9d83c07fca121ab77b12e563086348461ea100ae4b7478"
+}
