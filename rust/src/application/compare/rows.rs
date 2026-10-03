@@ -988,16 +988,6 @@ pub(super) fn bk_for_row(
     if almismatch_same_locus(row, counterparts) {
         return "lm";
     }
-    // Legacy's graph reconciles the two long insertion paths represented by
-    // a persisted GT=2/1 aggregate where the linear event signature reports
-    // a mismatch. Keep BK missing for this narrow aggregate shape; ordinary
-    // long single-ALT rows still use the block-level verdict below.
-    let long_aggregate_match = row.gt == "2/1"
-        && row.key.alt_allele.contains(',')
-        && row.key.alt_allele.split(',').all(|alt| alt.len() > 512);
-    if long_aggregate_match {
-        return ".";
-    }
     if hap_mismatch {
         return "lm";
     }

@@ -1836,14 +1836,22 @@ mod memory_guards {
     }
 
     #[test]
-    fn bk_path_long_persisted_aggregate_keeps_missing_kind() {
-        let long = variant(
-            1533412,
-            "C",
-            &format!("C{},C{}", "A".repeat(600), "A".repeat(700)),
-            "2/1",
-        );
-        assert_eq!(bk_for_row(&long, &[], true), ".");
+    fn bk_path_long_aggregate_follows_haplotype_verdict() {
+        // Issue #92: original hap.py keeps lm on the prepared 2/1 query
+        // at both 512 and 785/789 bases. Length and GT orientation do not
+        // override ctype=hap:mismatch; hap:match/hapfail still fall through.
+        for (a, b) in [(511, 511), (784, 788)] {
+            for gt in ["1/2", "2/1", "1|2", "2|1"] {
+                let query = variant(
+                    43,
+                    "G",
+                    &format!("G{},G{}", "A".repeat(a), "C".repeat(b)),
+                    gt,
+                );
+                assert_eq!(bk_for_row(&query, &[], true), "lm", "{a}/{b} {gt}");
+                assert_eq!(bk_for_row(&query, &[], false), ".", "{a}/{b} {gt}");
+            }
+        }
     }
 
     #[test]

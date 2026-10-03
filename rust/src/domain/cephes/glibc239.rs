@@ -1,5 +1,5 @@
 //! Deterministic positive-finite `log`, `exp`, and `pow` cores matching the
-//! AVX2/FMA scalar path selected by Ubuntu glibc 2.39 on the legacy reference.
+//! SSE2 scalar path selected by Ubuntu glibc 2.39 on the legacy reference.
 //!
 //! Ported from musl v1.2.5 commit 0784374d561435f7c787a555aeab8ede699ed298,
 //! `src/math/{log,log_data,exp,exp_data,pow,pow_data}.c`. Those files are
@@ -28,8 +28,8 @@ fn top12(x: f64) -> u32 {
     (x.to_bits() >> 52) as u32
 }
 
-/// musl/AOR `log`, with every contraction made explicit to match glibc's
-/// `__ieee754_log_fma` code generation independently of the Rust target CPU.
+/// musl/AOR `log`, preserving the separate rounded operations in the pinned
+/// glibc SSE2 implementation independently of the Rust target CPU.
 pub(super) fn log(x: f64) -> f64 {
     let mut ix = x.to_bits();
     const LO: u64 = 0x3fee_0000_0000_0000;
@@ -43,11 +43,11 @@ pub(super) fn log(x: f64) -> f64 {
         let r2 = r * r;
         let r3 = r * r2;
         let b = |index| value(LOG_POLY1_BITS[index]);
-        let q0 = r2.mul_add(b(3), r.mul_add(b(2), b(1)));
-        let q1 = r2.mul_add(b(6), r.mul_add(b(5), b(4)));
-        let q2 = r3.mul_add(b(10), r2.mul_add(b(9), r.mul_add(b(8), b(7))));
-        let q = r3.mul_add(q2, q1);
-        let mut y = r3 * r3.mul_add(q, q0);
+        let q0 = b(1) + r * b(2) + r2 * b(3);
+        let q1 = b(4) + r * b(5) + r2 * b(6);
+        let q2 = b(7) + r * b(8) + r2 * b(9) + r3 * b(10);
+        let q = q1 + r3 * q2;
+        let mut y = r3 * (q0 + r3 * q);
 
         let w_split = r * 134_217_728.0;
         let r_hi = (r + w_split) - w_split;
@@ -55,7 +55,7 @@ pub(super) fn log(x: f64) -> f64 {
         let w = (r_hi * r_hi) * b(0);
         let hi = r + w;
         let mut lo = (r - hi) + w;
-        lo = (b(0) * r_lo).mul_add(r_hi + r, lo);
+        lo += b(0) * r_lo * (r_hi + r);
         y += lo;
         y + hi
     } else {
@@ -81,18 +81,19 @@ pub(super) fn log(x: f64) -> f64 {
         let z = value(iz);
         let invc = value(LOG_TABLE_BITS[2 * index]);
         let logc = value(LOG_TABLE_BITS[2 * index + 1]);
-        let r = z.mul_add(invc, -1.0);
+        let r = (z
+            - value(LOG_SPLIT_TABLE_BITS[2 * index])
+            - value(LOG_SPLIT_TABLE_BITS[2 * index + 1]))
+            * invc;
 
-        let w = exponent.mul_add(LN2_HI, logc);
+        let w = exponent * LN2_HI + logc;
         let hi = w + r;
-        let lo = exponent.mul_add(LN2_LO, (w - hi) + r);
+        let lo = (w - hi) + r + exponent * LN2_LO;
         let r2 = r * r;
         let r3 = r * r2;
         let a = |index| value(LOG_POLY_BITS[index]);
-        let p1 = r.mul_add(a(2), a(1));
-        let p2 = r.mul_add(a(4), a(3));
-        let p = r2.mul_add(p2, p1);
-        let y = r3.mul_add(p, r2.mul_add(a(0), lo));
+        let p = a(1) + r * a(2) + r2 * (a(3) + r * a(4));
+        let y = lo + r2 * a(0) + r3 * p;
         y + hi
     }
 }
@@ -102,11 +103,11 @@ fn exp_special_case(tmp: f64, mut scale_bits: u64, ki: u64) -> f64 {
     if (ki as u32) & 0x8000_0000 == 0 {
         scale_bits = scale_bits.wrapping_sub(1009_u64 << 52);
         let scale = value(scale_bits);
-        return f64::from_bits((1009_u64 + 1023) << 52) * scale.mul_add(tmp, scale);
+        return f64::from_bits((1009_u64 + 1023) << 52) * (scale + scale * tmp);
     }
     scale_bits = scale_bits.wrapping_add(1022_u64 << 52);
     let scale = value(scale_bits);
-    let mut y = scale.mul_add(tmp, scale);
+    let mut y = scale + scale * tmp;
     if y.abs() < 1.0 {
         let one = if y < 0.0 { -1.0 } else { 1.0 };
         let lo = (scale - y) + scale * tmp;
@@ -145,11 +146,10 @@ fn exp_core(x: f64, tail_input: f64) -> f64 {
         abs_top = 0;
     }
 
-    let shifted = x.mul_add(INV_LN2_N, SHIFT);
+    let shifted = x * INV_LN2_N + SHIFT;
     let ki = shifted.to_bits();
     let kd = shifted - SHIFT;
-    let mut r = kd.mul_add(NEG_LN2_HI_N, x);
-    r = kd.mul_add(NEG_LN2_LO_N, r);
+    let mut r = x + kd * NEG_LN2_HI_N + kd * NEG_LN2_LO_N;
     r += tail_input;
     let index = 2 * ((ki as usize) % TABLE_SIZE);
     let top = ki << 45;
@@ -157,19 +157,16 @@ fn exp_core(x: f64, tail_input: f64) -> f64 {
     let scale_bits = EXP_TABLE_BITS[index + 1].wrapping_add(top);
     let r2 = r * r;
     let c = |index| value(EXP_POLY_BITS[index]);
-    let p1 = r.mul_add(c(1), c(0));
-    let p2 = r.mul_add(c(3), c(2));
-    let mut tmp = r2.mul_add(p1, tail + r);
-    tmp = (r2 * r2).mul_add(p2, tmp);
+    let tmp = tail + r + r2 * (c(0) + r * c(1)) + r2 * r2 * (c(2) + r * c(3));
     if abs_top == 0 {
         exp_special_case(tmp, scale_bits, ki)
     } else {
         let scale = value(scale_bits);
-        scale.mul_add(tmp, scale)
+        scale + scale * tmp
     }
 }
 
-/// musl/AOR `exp`, with the FMA path frozen explicitly.
+/// musl/AOR `exp`, preserving the pinned glibc SSE2 operation order.
 pub(super) fn exp(x: f64) -> f64 {
     exp_core(x, 0.0)
 }
@@ -183,23 +180,26 @@ fn pow_log_inline(ix: u64) -> (f64, f64) {
     let invc = value(POW_TABLE_BITS[3 * index]);
     let logc = value(POW_TABLE_BITS[3 * index + 1]);
     let logc_tail = value(POW_TABLE_BITS[3 * index + 2]);
-    let r = z.mul_add(invc, -1.0);
+    let z_hi = value((iz + (1_u64 << 31)) & (!0_u64 << 32));
+    let z_lo = z - z_hi;
+    let r_hi = z_hi * invc - 1.0;
+    let r_lo = z_lo * invc;
+    let r = r_hi + r_lo;
 
-    let t1 = exponent.mul_add(LN2_HI, logc);
+    let t1 = exponent * LN2_HI + logc;
     let t2 = t1 + r;
-    let lo1 = exponent.mul_add(LN2_LO, logc_tail);
+    let lo1 = exponent * LN2_LO + logc_tail;
     let lo2 = (t1 - t2) + r;
     let a = |index| value(POW_POLY_BITS[index]);
     let ar = a(0) * r;
     let ar2 = r * ar;
     let ar3 = r * ar2;
-    let hi = t2 + ar2;
-    let lo3 = ar.mul_add(r, -ar2);
-    let lo4 = (t2 - hi) + ar2;
-    let p1 = r.mul_add(a(2), a(1));
-    let p2 = r.mul_add(a(4), a(3));
-    let p3 = r.mul_add(a(6), a(5));
-    let p = ar3 * ar2.mul_add(ar2.mul_add(p3, p2), p1);
+    let ar_hi = a(0) * r_hi;
+    let ar_hi2 = r_hi * ar_hi;
+    let hi = t2 + ar_hi2;
+    let lo3 = r_lo * (ar + ar_hi);
+    let lo4 = (t2 - hi) + ar_hi2;
+    let p = ar3 * (a(1) + r * a(2) + ar2 * (a(3) + r * a(4) + ar2 * (a(5) + r * a(6))));
     let lo = (((lo1 + lo2) + lo3) + lo4) + p;
     let y = hi + lo;
     (y, (hi - y) + lo)
@@ -220,9 +220,12 @@ pub(super) fn pow(base: f64, exponent: f64) -> f64 {
         ix = ix.wrapping_sub(52_u64 << 52);
     }
     let (log_hi, log_lo) = pow_log_inline(ix);
-    let product_hi = exponent * log_hi;
-    let product_error = exponent.mul_add(log_hi, -product_hi);
-    let product_lo = exponent.mul_add(log_lo, product_error);
+    let exponent_hi = value(exponent.to_bits() & (!0_u64 << 27));
+    let exponent_lo = exponent - exponent_hi;
+    let log_split_hi = value(log_hi.to_bits() & (!0_u64 << 27));
+    let log_split_lo = (log_hi - log_split_hi) + log_lo;
+    let product_hi = exponent_hi * log_split_hi;
+    let product_lo = exponent_lo * log_split_hi + exponent * log_split_lo;
     exp_core(product_hi, product_lo)
 }
 
@@ -1170,13 +1173,278 @@ const POW_TABLE_BITS: [u64; 384] = [
     0xbd0a0b2a08a465dc,
 ];
 
+const LOG_SPLIT_TABLE_BITS: [u64; 256] = [
+    0x3fe61000014fb66b,
+    0x3c7e026c91425b3c,
+    0x3fe63000034db495,
+    0x3c8dbfea48005d41,
+    0x3fe650000d94d478,
+    0x3c8e7fa786d6a5b7,
+    0x3fe67000074e6fad,
+    0x3c61fcea6b54254c,
+    0x3fe68ffffedf0fae,
+    0xbc7c7e274c590efd,
+    0x3fe6b0000763c5bc,
+    0xbc8ac16848dcda01,
+    0x3fe6d0001e5cc1f6,
+    0x3c833f1c9d499311,
+    0x3fe6efffeb05f63e,
+    0xbc7e80041ae22d53,
+    0x3fe710000e869780,
+    0x3c7bff6671097952,
+    0x3fe72ffffc67e912,
+    0x3c8c00e226bd8724,
+    0x3fe74fffdf81116a,
+    0xbc6e02916ef101d2,
+    0x3fe770000f679c90,
+    0xbc67fc71cd549c74,
+    0x3fe78ffffa7ec835,
+    0x3c81bec19ef50483,
+    0x3fe7affffe20c2e6,
+    0xbc707e1729cc6465,
+    0x3fe7cfffed3fc900,
+    0xbc808072087b8b1c,
+    0x3fe7efffe9261a76,
+    0x3c8dc0286d9df9ae,
+    0x3fe81000049ca3e8,
+    0x3c897fd251e54c33,
+    0x3fe8300017932c8f,
+    0xbc8afee9b630f381,
+    0x3fe850000633739c,
+    0x3c89bfbf6b6535bc,
+    0x3fe87000204289c6,
+    0xbc8bbf65f3117b75,
+    0x3fe88fffebf57904,
+    0xbc89006ea23dcb57,
+    0x3fe8b00022bc04df,
+    0xbc7d00df38e04b0a,
+    0x3fe8cfffe50c1b8a,
+    0xbc88007146ff9f05,
+    0x3fe8effffc918e43,
+    0x3c83817bd07a7038,
+    0x3fe910001efa5fc7,
+    0x3c893e9176dfb403,
+    0x3fe9300013467bb9,
+    0x3c7f804e4b980276,
+    0x3fe94fffe6ee076f,
+    0xbc8f7ef0d9ff622e,
+    0x3fe96fffde3c12d1,
+    0xbc7082aa962638ba,
+    0x3fe98ffff4458a0d,
+    0xbc87801b9164a8ef,
+    0x3fe9afffdd982e3e,
+    0xbc8740e08a5a9337,
+    0x3fe9cfffed49fb66,
+    0x3c3fce08c19be000,
+    0x3fe9f00020f19c51,
+    0xbc8a3faa27885b0a,
+    0x3fea10001145b006,
+    0x3c74ff489958da56,
+    0x3fea300007bbf6fa,
+    0x3c8cbeab8a2b6d18,
+    0x3fea500010971d79,
+    0x3c88fecadd787930,
+    0x3fea70001df52e48,
+    0xbc8f41763dd8abdb,
+    0x3fea90001c593352,
+    0xbc8ebf0284c27612,
+    0x3feab0002a4f3e4b,
+    0xbc69fd043cff3f5f,
+    0x3feacfffd7ae1ed1,
+    0xbc823ee7129070b4,
+    0x3feaefffee510478,
+    0x3c6a063ee00edea3,
+    0x3feb0fffdb650d5b,
+    0x3c5a06c8381f0ab9,
+    0x3feb2ffffeaaca57,
+    0xbc79011e74233c1d,
+    0x3feb4fffd995badc,
+    0xbc79ff1068862a9f,
+    0x3feb7000249e659c,
+    0x3c8aff45d0864f3e,
+    0x3feb8ffff9871640,
+    0x3c7cfe7796c2c3f9,
+    0x3febafffd204cb4f,
+    0xbc63ff27eef22bc4,
+    0x3febcfffd2415c45,
+    0xbc6cffb7ee3bea21,
+    0x3febeffff86309df,
+    0xbc814103972e0b5c,
+    0x3fec0fffe1b57653,
+    0x3c8bc16494b76a19,
+    0x3fec2ffff1fa57e3,
+    0xbc64feef8d30c6ed,
+    0x3fec4fffdcbfe424,
+    0xbc843f68bcec4775,
+    0x3fec6fffed54b9f7,
+    0x3c847ea3f053e0ec,
+    0x3fec8fffeb998fd5,
+    0x3c7383068df992f1,
+    0x3fecb0002125219a,
+    0xbc68fd8e64180e04,
+    0x3feccfffdd94469c,
+    0x3c8e7ebe1cc7ea72,
+    0x3fecefffeafdc476,
+    0x3c8ebe39ad9f88fe,
+    0x3fed1000169af82b,
+    0x3c757d91a8b95a71,
+    0x3fed30000d0ff71d,
+    0x3c89c1906970c7da,
+    0x3fed4fffea790fc4,
+    0xbc580e37c558fe0c,
+    0x3fed70002edc87e5,
+    0xbc7f80d64dc10f44,
+    0x3fed900021dc82aa,
+    0xbc747c8f94fd5c5c,
+    0x3fedafffd86b0283,
+    0x3c8c7f1dc521617e,
+    0x3fedd000296c4739,
+    0x3c88019eb2ffb153,
+    0x3fedefffe54490f5,
+    0x3c6e00d2c652cc89,
+    0x3fee0fffcdabf694,
+    0xbc7f8340202d69d2,
+    0x3fee2fffdb52c8dd,
+    0x3c7b00c1ca1b0864,
+    0x3fee4ffff24216ef,
+    0x3c72ffa8b094ab51,
+    0x3fee6fffe88a5e11,
+    0xbc57f673b1efbe59,
+    0x3fee9000119eff0d,
+    0xbc84808d5e0bc801,
+    0x3feeafffdfa51744,
+    0x3c780006d54320b5,
+    0x3feed0001a127fa1,
+    0xbc5002f860565c92,
+    0x3feef00007babcc4,
+    0xbc8540445d35e611,
+    0x3fef0ffff57a8d02,
+    0xbc4ffb3139ef9105,
+    0x3fef30001ee58ac7,
+    0x3c8a81acf2731155,
+    0x3fef4ffff5823494,
+    0x3c8a3f41d4d7c743,
+    0x3fef6ffffca94c6b,
+    0xbc6202f41c987875,
+    0x3fef8fffe1f9c441,
+    0x3c777dd1f477e74b,
+    0x3fefafffd2e0e37e,
+    0xbc6f01199a7ca331,
+    0x3fefd0001c77e49e,
+    0x3c7181ee4bceacb1,
+    0x3fefeffff7e0c331,
+    0xbc6e05370170875a,
+    0x3ff00ffff465606e,
+    0xbc8a7ead491c0ada,
+    0x3ff02ffff3867a58,
+    0xbc977f69c3fcb2e0,
+    0x3ff04ffffdfc0d17,
+    0x3c97bffe34cb945b,
+    0x3ff0700003cd4d82,
+    0x3c820083c0e456cb,
+    0x3ff08ffff9f2cbe8,
+    0xbc6dffdfbe37751a,
+    0x3ff0b000010cda65,
+    0xbc913f7faee626eb,
+    0x3ff0d00001a4d338,
+    0x3c807dfa79489ff7,
+    0x3ff0effffadafdfd,
+    0xbc77040570d66bc0,
+    0x3ff110000bbafd96,
+    0x3c8e80d4846d0b62,
+    0x3ff12ffffae5f45d,
+    0x3c9dbffa64fd36ef,
+    0x3ff150000dd59ad9,
+    0x3c9a0077701250ae,
+    0x3ff170000f21559a,
+    0x3c8dfdf9e2e3deee,
+    0x3ff18ffffc275426,
+    0x3c910030dc3b7273,
+    0x3ff1b000123d3c59,
+    0x3c997f7980030188,
+    0x3ff1cffff8299eb7,
+    0xbc65f932ab9f8c67,
+    0x3ff1effff48ad400,
+    0x3c937fbf9da75beb,
+    0x3ff210000c8b86a4,
+    0x3c9f806b91fd5b22,
+    0x3ff2300003854303,
+    0x3c93ffc2eb9fbf33,
+    0x3ff24fffffbcf684,
+    0x3c7601e77e2e2e72,
+    0x3ff26ffff52921d9,
+    0x3c7ffcbb767f0c61,
+    0x3ff2900014933a3c,
+    0xbc7202ca3c02412b,
+    0x3ff2b00014556313,
+    0xbc92808233f21f02,
+    0x3ff2cfffebfe523b,
+    0xbc88ff7e384fdcf2,
+    0x3ff2f0000bb8ad96,
+    0xbc85ff51503041c5,
+    0x3ff30ffffb7ae2af,
+    0xbc810071885e289d,
+    0x3ff32ffffeac5f7f,
+    0xbc91ff5d3fb7b715,
+    0x3ff350000ca66756,
+    0x3c957f82228b82bd,
+    0x3ff3700011fbf721,
+    0x3c8000bac40dd5cc,
+    0x3ff38ffff9592fb9,
+    0xbc943f9d2db2a751,
+    0x3ff3b00004ddd242,
+    0x3c857f6b707638e1,
+    0x3ff3cffff5b2c957,
+    0x3c7a023a10bf1231,
+    0x3ff3efffeab0b418,
+    0x3c987f6d66b152b0,
+    0x3ff410001532aff4,
+    0x3c67f8375f198524,
+    0x3ff4300017478b29,
+    0x3c8301e672dc5143,
+    0x3ff44fffe795b463,
+    0x3c89ff69b8b2895a,
+    0x3ff46fffe80475e0,
+    0xbc95c0b19bc2f254,
+    0x3ff48fffef6fc1e7,
+    0x3c9b4009f23a2a72,
+    0x3ff4afffe5bea704,
+    0xbc94ffb7bf0d7d45,
+    0x3ff4d000171027de,
+    0xbc99c06471dc6a3d,
+    0x3ff4f0000ff03ee2,
+    0x3c977f890b85531c,
+    0x3ff5100012dc4bd1,
+    0x3c6004657166a436,
+    0x3ff530001605277a,
+    0xbc96bfcece233209,
+    0x3ff54fffecdb704c,
+    0xbc8902720505a1d7,
+    0x3ff56fffef5f54a9,
+    0x3c9bbfe60ec96412,
+    0x3ff5900017e61012,
+    0x3c887ec581afef90,
+    0x3ff5b00003c93e92,
+    0xbc9f41080abf0cc0,
+    0x3ff5d0001d4919bc,
+    0xbc98812afb254729,
+    0x3ff5efffe7b87a89,
+    0xbc947eb780ed6904,
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn matches_pinned_glibc_239_fma_diagnostic() {
+    fn matches_pinned_glibc_239_sse2_diagnostic() {
         // Captured by resolving the libm IFUNCs in the pinned Ubuntu image.
+        // The SSE2 path keeps these intermediate results distinct from FMA.
+        assert_eq!(
+            log(f64::from_bits(0x3feb_e5b6_9d24_5c83)).to_bits(),
+            0xbfc1_8ff1_f64e_1740
+        );
+        assert_eq!(pow(50.5, 50.0).to_bits(), 0x519e_13a2_4816_f3b2);
         assert_eq!(log(0.025).to_bits(), 0xc00d_82d3_3b32_720d);
         assert_eq!(exp(-3.69).to_bits(), 0x3f99_9242_b059_508a);
         assert_eq!(pow(0.25, 1.5).to_bits(), 0x3fc0_0000_0000_0000);

@@ -769,7 +769,6 @@ pub(super) fn process_cluster(
             }
         }
     }
-    correct_long_aggregate_block_kind(&mut rows[output_start..]);
     if region_state.any_conf {
         correct_reaching_insertion_aggregate_block_kind(&mut rows[output_start..]);
     }
@@ -1077,23 +1076,6 @@ pub(super) fn legacy_unknown_aggregate_local_mismatch(
         }
         None
     })
-}
-
-pub(super) fn correct_long_aggregate_block_kind(rows: &mut [AnnotatedRow]) {
-    for row in rows {
-        let raw = row.record.raw();
-        let is_long_aggregate = raw.alt_allele.contains(',')
-            && raw.alt_allele.split(',').all(|alt| alt.len() > 512)
-            && raw
-                .samples
-                .iter()
-                .any(|sample| sample.starts_with("2/1:UNK:lm:"));
-        if is_long_aggregate {
-            row.record
-                .replace_sample_fragment(":UNK:lm:", ":UNK:.:")
-                .expect("comparison decision edits preserve valid records");
-        }
-    }
 }
 
 pub(super) fn correct_reaching_insertion_aggregate_block_kind(rows: &mut [AnnotatedRow]) {
