@@ -11,7 +11,8 @@
 //! coefficients, and convergence thresholds — only translated into
 //! Rust syntax and idiomatic arithmetic. Logarithm, exponential, and power
 //! operations use an internal port of the AVX2/FMA scalar math selected by the
-//! Ubuntu glibc 2.39 reference so their last bits do not depend on the host libc.
+//! native linux/amd64 Ubuntu glibc 2.39 reference so their last bits do not
+//! depend on the host libc or the CPU features exposed by local emulation.
 
 // Preserve the original Cephes decimal constants to match the legacy implementation exactly.
 #![allow(clippy::excessive_precision)]
@@ -1218,6 +1219,11 @@ mod tests {
             (315.5, 1_071.5, 0.025, 0x3fca_5775_399a_4209),
             (983.5, 173.5, 0.025, 0x3fea_867b_bd42_39eb),
             (2_405.5, 5_466.5, 0.025, 0x3fd2_e8a0_ce86_2c1b),
+            // chr21_ga4gh_roc_controls: native GitHub Actions linux/amd64
+            // legacy values, not the SSE2 values from Mac emulation.
+            (67.5, 50.5, 0.025, 0x3fde_db7c_dc3f_3621),
+            (96.5, 523.5, 0.025, 0x3fc0_6925_889d_8a17),
+            (10.5, 50.5, 0.025, 0x3fb6_cb85_3d3e_3fea),
         ];
         for (a, b, p, expected_bits) in cases {
             assert_eq!(

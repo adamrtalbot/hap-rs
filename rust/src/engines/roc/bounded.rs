@@ -4539,6 +4539,7 @@ fn render_rows(
                     },
                     is_filter_tier && config.filter_counts_only,
                     config.ci_alpha,
+                    active_types.contains("SNP"),
                 )
             )?;
             row_count += 1;
@@ -4563,6 +4564,7 @@ fn render_row(
     sizes: &RowSizes<'_>,
     counts_only: bool,
     ci_alpha: f64,
+    has_snp_columns: bool,
 ) -> String {
     let &RowSizes {
         subset_size,
@@ -4582,7 +4584,9 @@ fn render_row(
     // TOTAL / FN blocks emit `0` for the count and `.` for substats.
     let is_filter_tier = counts_only;
     let supports_titv = key.ty == "SNP";
-    let missing_titv = if conf_size > 0 { "." } else { "" };
+    // Legacy's raw table only creates ti/tv columns for SNP groups. Missing
+    // INDEL cells are dots in those columns, but empty when no column exists.
+    let missing_titv = if has_snp_columns { "." } else { "" };
     let mut row = Vec::with_capacity(EXTENDED_HEADER.len());
 
     row.push(key.ty.clone());
@@ -5274,9 +5278,8 @@ mod tests {
 
     #[test]
     fn render_emits_expected_cell_formats() {
-        // INDEL baseline row with all zero counts: ti/tv cells should be
-        // empty, TiTv_ratio should be empty, denom-zero metrics should render
-        // "0.0" (matching `metric_ratio`).
+        // INDEL baseline: unsupported ti/tv cells follow column presence;
+        // TiTv_ratio is empty and denominator-zero metrics render "0.0".
         let key = RowKey::new("INDEL", "*", "*", "ALL");
         let emitted = EmittedRow {
             qq_str: "*".to_string(),
@@ -5297,6 +5300,7 @@ mod tests {
             },
             false,
             0.0,
+            true,
         );
         let cells: Vec<&str> = rendered.split(',').collect();
         assert_eq!(cells.len(), 65, "expected 65 columns, got {}", cells.len());
@@ -5310,7 +5314,7 @@ mod tests {
         assert_eq!(cells[12], "0");
         // Subset.Size = raw subset_size integer at Subset="*".
         assert_eq!(cells[13], "100");
-        // Confidence regions make unsupported INDEL ti/tv cells use `.`.
+        // SNP groups create the columns, making unsupported INDEL cells dots.
         assert_eq!(cells[17], ".");
         assert_eq!(cells[18], ".");
         // TiTv_ratio: empty for INDEL.
@@ -5320,20 +5324,21 @@ mod tests {
         let het_hom = het_hom_ratio(0, 0);
         assert_eq!(het_hom, "");
 
-        let without_confidence = render_row(
+        let without_snp_columns = render_row(
             &key,
             &emitted,
             &RowSizes {
                 subset_size: 100,
                 whole_reference_size: 140,
-                conf_size: 0,
+                conf_size: 50,
                 subset_sizes: &subset_sizes,
                 subset_confidence_sizes: &subset_confidence_sizes,
             },
             false,
             0.0,
+            false,
         );
-        let cells = without_confidence.split(',').collect::<Vec<_>>();
+        let cells = without_snp_columns.split(',').collect::<Vec<_>>();
         assert_eq!(cells[17], "");
         assert_eq!(cells[18], "");
     }
@@ -5394,11 +5399,17 @@ mod tests {
         )];
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().join("result");
-        write_roc_files(&prefix, &rows, 100, 0).unwrap();
+        write_roc_files(&prefix, &rows, 100, 50).unwrap();
 
         let all = crate::adapters::vcf::read_text(&suffixed_report_path(&prefix, "roc.all.csv.gz"))
             .unwrap();
         assert!(all.lines().skip(1).all(|line| line.starts_with("INDEL,")));
+        for line in all.lines().skip(1) {
+            let cells = line.split(',').collect::<Vec<_>>();
+            for offset in (16..65).step_by(7) {
+                assert_eq!(&cells[offset + 1..offset + 3], ["", ""]);
+            }
+        }
         assert!(suffixed_report_path(&prefix, "roc.Locations.INDEL.csv.gz").exists());
         assert!(suffixed_report_path(&prefix, "roc.Locations.INDEL.PASS.csv.gz").exists());
         assert!(!suffixed_report_path(&prefix, "roc.Locations.SNP.csv.gz").exists());
@@ -5971,6 +5982,33 @@ mod tests {
     }
 
     #[test]
+    fn confidence_intervals_match_native_linux_qfy_roc_controls() {
+        // Pinned legacy outputs from GitHub Actions run 37097416602.
+        // These differ from the SSE2 path selected by Mac emulation.
+        for (x, n, expected_lower, expected_upper) in [
+            (67, 117, 0.482_146_468_243_486_9_f64, None),
+            (
+                96,
+                619,
+                0.128_208_820_063_335_98,
+                Some(0.185_185_046_470_126_8_f64),
+            ),
+            (
+                10,
+                60,
+                0.089_042_975_856_727_63,
+                Some(0.275_519_726_393_335_8_f64),
+            ),
+        ] {
+            let (lower, upper) = jeffreys_interval(x, n, 0.05);
+            assert_eq!(lower.to_bits(), expected_lower.to_bits(), "x={x}, n={n}");
+            if let Some(expected_upper) = expected_upper {
+                assert_eq!(upper.to_bits(), expected_upper.to_bits(), "x={x}, n={n}");
+            }
+        }
+    }
+
+    #[test]
     fn confidence_interval_csv_renders_full_repr() {
         assert_eq!(format_ci(5.280_579_842_943_484e-5), "5.280579842943484e-05");
         assert_eq!(
@@ -6020,6 +6058,7 @@ mod tests {
             },
             true,
             0.05,
+            true,
         );
         let cells = rendered.split(',').collect::<Vec<_>>();
         assert_eq!(

@@ -1,5 +1,6 @@
 //! Deterministic positive-finite `log`, `exp`, and `pow` cores matching the
-//! AVX2/FMA scalar path selected by Ubuntu glibc 2.39 on the legacy reference.
+//! AVX2/FMA scalar path selected by Ubuntu glibc 2.39 on native linux/amd64
+//! GitHub Actions runners. Mac linux/amd64 emulation selects SSE2 instead.
 //!
 //! Ported from musl v1.2.5 commit 0784374d561435f7c787a555aeab8ede699ed298,
 //! `src/math/{log,log_data,exp,exp_data,pow,pow_data}.c`. Those files are
@@ -1177,6 +1178,12 @@ mod tests {
     #[test]
     fn matches_pinned_glibc_239_fma_diagnostic() {
         // Captured by resolving the libm IFUNCs in the pinned Ubuntu image.
+        // First divergent math calls in chr21_ga4gh_roc_controls.
+        assert_eq!(
+            log(f64::from_bits(0x3feb_e5b6_9d24_5c83)).to_bits(),
+            0xbfc1_8ff1_f64e_173f
+        );
+        assert_eq!(pow(50.5, 50.0).to_bits(), 0x519e_13a2_4816_f3b1);
         assert_eq!(log(0.025).to_bits(), 0xc00d_82d3_3b32_720d);
         assert_eq!(exp(-3.69).to_bits(), 0x3f99_9242_b059_508a);
         assert_eq!(pow(0.25, 1.5).to_bits(), 0x3fc0_0000_0000_0000);
