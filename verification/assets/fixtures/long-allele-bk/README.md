@@ -1,6 +1,6 @@
 # Long-allele block kind
 
-The mismatch inputs reproduce [issue #92](https://github.com/adamrtalbot/hap.py/issues/92)
+The mismatch inputs reproduce [issue #92](https://github.com/adamrtalbot/hap-rs/issues/92)
 exactly: reference `ACGT` repeated 30 times, truth `G>T 0/1` at chr1:43,
 query `G>G+A*784,G+C*788 1/2`, and confidence BED `chr1 0 5`.
 Preprocessing retains the query as one aggregate with GT `2/1`.

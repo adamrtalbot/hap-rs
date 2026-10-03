@@ -5982,6 +5982,33 @@ mod tests {
     }
 
     #[test]
+    fn confidence_intervals_match_native_linux_qfy_roc_controls() {
+        // Pinned legacy outputs from GitHub Actions run 37097416602.
+        // These differ from the SSE2 path selected by Mac emulation.
+        for (x, n, expected_lower, expected_upper) in [
+            (67, 117, 0.482_146_468_243_486_9_f64, None),
+            (
+                96,
+                619,
+                0.128_208_820_063_335_98,
+                Some(0.185_185_046_470_126_8_f64),
+            ),
+            (
+                10,
+                60,
+                0.089_042_975_856_727_63,
+                Some(0.275_519_726_393_335_8_f64),
+            ),
+        ] {
+            let (lower, upper) = jeffreys_interval(x, n, 0.05);
+            assert_eq!(lower.to_bits(), expected_lower.to_bits(), "x={x}, n={n}");
+            if let Some(expected_upper) = expected_upper {
+                assert_eq!(upper.to_bits(), expected_upper.to_bits(), "x={x}, n={n}");
+            }
+        }
+    }
+
+    #[test]
     fn confidence_interval_csv_renders_full_repr() {
         assert_eq!(format_ci(5.280_579_842_943_484e-5), "5.280579842943484e-05");
         assert_eq!(
