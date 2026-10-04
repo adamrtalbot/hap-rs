@@ -32,12 +32,14 @@ decomposition. The prepared VCF should have:
 - One row at chr1:7 with GT=1/1 (not two het rows)
 - One row at chr1:9 with GT=1/1 (not two het rows)
 
+Truth has one SNP at chr1:1 to establish the comparison chromosome. Confidence
+covers only bases 0-4, leaving all query annotations UNK with BK=".": one INDEL
+hetalt row (at chr1:5) and two homalt SNP rows (at chr1:7 and chr1:9).
+
 Real XV7ZN query rows:
 ```
 chr1	102045484	.	GAGAGATATATATAT	G,GATATATATATATAT	149.158	PASS	.	GT	1/2
 chr1	102045486	.	G	T	17.0188	PASS	votes=2	GT:GQ	0/1:17.02
 chr1	102045488	.	G	T	18.1512	PASS	votes=2	GT:GQ	0/1:18.15
 ```
-
-Truth has no variants at this locus (query-only UNK case).
 
