@@ -1,0 +1,19 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=PS,Number=1,Type=Integer,Description="Phase set">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="DP">
+##FORMAT=<ID=ADALL,Number=R,Type=Integer,Description="ADALL">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="AD">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="GQ">
+##contig=<ID=chr1,length=161>
+##contig=<ID=chr10,length=121>
+##contig=<ID=chr15,length=121>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	TRUTH
+chr1	157	.	A	G	50	PASS	.	GT:PS:DP:ADALL:AD:GQ	0/1:.:200:10,10:10,10:50
+chr10	61	.	T	TTG	50	PASS	.	GT:PS:DP:ADALL:AD:GQ	0/1:.:176:10,31:3,14:50
+chr10	61	.	TTGTGTGTG	T	50	PASS	.	GT:PS:DP:ADALL:AD:GQ	1/0:.:176:10,89:3,60:50
+chr10	112	.	C	CAT	50	PASS	.	GT:PS:DP:ADALL:AD:GQ	0/1:.:200:10,10:10,10:50
+chr15	61	.	G	GACACAC	50	PASS	.	GT:PS:DP:ADALL:AD:GQ	1/0:.:176:18,93:0,64:50
+chr15	61	.	G	GACAGACAGAC	50	PASS	.	GT:PS:DP:ADALL:AD:GQ	0/1:.:176:18,85:0,60:50
+chr15	113	.	G	A	50	PASS	.	GT:PS:DP:ADALL:AD:GQ	0/1:.:200:10,10:10,10:50

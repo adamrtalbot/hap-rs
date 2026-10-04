@@ -1801,6 +1801,50 @@ mod tests {
     }
 
     #[test]
+    fn af_zero_vs_fraction_keeps_shared_format_order_before_writer_bucket() {
+        // Opposite-slot DRAGEN alleles after split/normalize carry AF=0 and
+        // AF=0.778. Value-based type bucketing would put AF in different
+        // FORMAT positions; aggregation must still see a shared layout, so
+        // reorder_format_fields runs only after location aggregation.
+        let format = "GT:AD:ADO:DP:AF:F1R2:F2R1:GQ:MB:PL:GP:PRI:SB";
+        let left = "0/1:2,0:0:9:0:0,0:2,0:31:0,2,4,3:47:76.993,178.41,45.763:0,4,7.01:2,0,5,2";
+        let right = "1/0:2,7:0:9:0.778:0,2:2,5:31:0,2,4,3:51:76.993,31.233,50.003:0,4,7.01:2,0,5,2";
+        let mut a = make_record(".");
+        a.pos = 81;
+        a.ref_allele = "G".into();
+        a.alt_allele = "GAGAGAGGAAGGAAGGAAGGA".into();
+        a.format = Some(format.into());
+        a.samples = vec![left.into()];
+        let mut b = make_record(".");
+        b.pos = 81;
+        b.ref_allele = "G".into();
+        b.alt_allele = "GAGGAAGGA".into();
+        b.format = Some(format.into());
+        b.samples = vec![right.into()];
+        assert_eq!(a.format, b.format);
+        let merged = crate::engines::variant_pipeline::aggregate_normalized_location_records(
+            vec![a.clone(), b.clone()],
+            false,
+        );
+        assert_eq!(
+            merged.len(),
+            1,
+            "shared FORMAT must allow hetalt aggregation"
+        );
+        assert!(merged[0].alt_allele.contains(','));
+        // Writer-time bucketing may still diverge per-record; that is fine
+        // after aggregation has already formed the hetalt.
+        let mut a_writer = a;
+        let mut b_writer = b;
+        reorder_format_fields(&mut a_writer);
+        reorder_format_fields(&mut b_writer);
+        assert_ne!(
+            a_writer.format, b_writer.format,
+            "AF=0 vs AF=0.778 still diverge at writer time"
+        );
+    }
+
+    #[test]
     fn somatic_conversion_uses_legacy_gt_modes_and_preserves_sample_formats_in_info() {
         let mut record = make_record("SOMATIC");
         record.alt_allele = "C,G".to_string();
@@ -2003,6 +2047,46 @@ mod tests {
         assert_eq!(records[0].alt_allele, "ATCTC");
         assert_eq!(records[0].qual, "0");
         assert_eq!(records[0].samples, ["0/1:5,7:0:0"]);
+        Ok(())
+    }
+
+    #[test]
+    fn same_anchor_deletion_keeps_opposite_slot_hets_split() -> Result<()> {
+        let directory = tempdir()?;
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("verification/assets/fixtures/dragen-same-anchor-deletion");
+        let output = directory.path().join("prepared.vcf.gz");
+        let mut args = interval_args(
+            &fixture.join("query.vcf"),
+            &output,
+            &fixture.join("ref.fa"),
+            None,
+            None,
+        );
+        args.decompose = true;
+        args.gender = PreprocessGender::None;
+        args.threads = Some(1);
+        run(args)?;
+        let (_, records) = vcf::load_raw_vcf(&output)?;
+        assert_eq!(records.len(), 4);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| (
+                    record.pos,
+                    record.ref_allele.as_str(),
+                    record.alt_allele.as_str(),
+                    record.qual.as_str(),
+                    record.samples[0].split(':').next().unwrap(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (10, "G", "GAAAAAAA", "17.06", "0/1"),
+                (10, "G", "GAAAAAAAA", "10.5", "1/1"),
+                (10, "GA", "G", "7.69", "1/1"),
+                (10, "GAAAAAAAAAA", "G", "17.06", "0/1"),
+            ],
+        );
         Ok(())
     }
 
