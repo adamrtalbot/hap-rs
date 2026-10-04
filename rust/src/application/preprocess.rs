@@ -743,6 +743,19 @@ fn run_inner(
     let output_count = output.serial;
     let phase_started = std::time::Instant::now();
     let records = LocationAggregatedRecords::new(output.finish()?, normalization_enabled);
+    // Match legacy VariantInput order: aggregate first, then VariantWriter's
+    // type-bucketed FORMAT layout. See drain_normalization_group.
+    let records = records.map(|item| {
+        item.and_then(|record| {
+            if !normalization_enabled {
+                return Ok(record);
+            }
+            let provenance = record.provenance();
+            let mut raw = record.into_raw();
+            reorder_format_fields(&mut raw);
+            vcf::ValidatedVcfRecord::try_from_raw(raw, provenance)
+        })
+    });
     vcf::write_validated_vcf_iter(&output_path, &headers, records)?;
     report_phase("external_sort_and_output_publication", phase_started);
     if output_path
@@ -1307,7 +1320,10 @@ fn drain_normalization_group(
             split.qual = "0".to_string();
         }
         blank_secondary_sample_annotations(&mut split, ctx.args.bcf, ctx.string_format_fields);
-        reorder_format_fields(&mut split);
+        // Defer FORMAT reordering until after location aggregation. Legacy
+        // VariantLocationAggregator merges before VariantWriter type-buckets
+        // FORMAT fields; doing it earlier lets AF=0 (int-looking) and AF=0.778
+        // (float) diverge and blocks opposite-slot hetalt re-aggregation.
         emit(vcf::ValidatedVcfRecord::try_from_raw(
             split,
             QueryProvenance::Unavailable,
