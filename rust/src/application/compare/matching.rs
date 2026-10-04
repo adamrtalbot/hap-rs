@@ -594,12 +594,6 @@ pub(super) fn process_cluster(
     // it); it just no longer overrides a genuine match (HG003 DeepVariant
     // chr11:7757959 adjacent/compound INDEL block, which legacy resolves gm).
     let is_match = signatures_overlap && !graph_failed;
-    // Legacy's `ctype == "hap:mismatch"` fires only when the block-level
-    // haplotype comparator actually ran (both signatures computed) AND
-    // the two sides disagreed. A None signature — hapcmp skipped on the
-    // n_nonsnp gate OR state-count cap exceeded — corresponds to
-    // legacy's "simple" / "hapfail" ctypes, neither of which promotes to
-    // BK=lm.
     let insert_conflict_counterpart = if allow_haplotype_match
         && estimated_state_count_with_limit(&cluster.query, config.max_enum) <= config.max_enum
     {
@@ -688,7 +682,6 @@ pub(super) fn process_cluster(
     } else {
         false
     };
-
     let remainder = Cluster {
         chrom: cluster.chrom.clone(),
         start: cluster.start,
@@ -769,7 +762,14 @@ pub(super) fn process_cluster(
             }
         }
     }
-    if region_state.any_conf {
+    // A 16–64 bp insertion that reaches a GT=2/1 aggregate is not itself a
+    // local mismatch. Pinned hap.py 0.3.15 classifies the short-read blocks
+    // in issue #80 as ctype=hap:match (kind=match/missing) and leaves BK=`.`.
+    // Promoting every UNK row whenever any part of that block touches CONF
+    // stamped BK=lm on DeepVariant chr7:32358881 and Sentieon chr13:85334339.
+    // Keep the rewrite only as a hap:mismatch annotation, which is the
+    // quantify path that actually emits lm. Hapfail stays `.`.
+    if region_state.any_conf && hap_mismatch {
         correct_reaching_insertion_aggregate_block_kind(&mut rows[output_start..]);
     }
     if !legacy_hap_promotions.is_empty() {

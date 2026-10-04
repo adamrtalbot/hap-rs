@@ -3047,6 +3047,139 @@ mod memory_guards {
     }
 
     #[test]
+    fn partial_conf_hapmatch_reaching_insertion_keeps_bk_dot() {
+        // Issue #80. Pinned hap.py 0.3.15 reports ctype=hap:match and BK=`.`
+        // for these prepared short-read blocks. The upstream SNP is inside
+        // CONF, so any_conf is set, and a 16-64 bp insertion reaches the
+        // GT=2/1 aggregate. That used to rewrite every UNK row to BK=lm.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("verification/assets/fixtures/short-read-bk");
+        let cases = [
+            (
+                "deepvariant",
+                "chr7",
+                0,
+                130,
+                vec![
+                    ("chr7", 110, "C", "T", "1/1"),
+                    ("chr7", 156, "TA", "T", "1/1"),
+                    ("chr7", 181, "T", "TTGTGTGTGTGTGTGTGTCTGTG", "1/0"),
+                    ("chr7", 181, "T", "TTGTGTGTGTGTGTGTGTCTGTGTG", "0/1"),
+                    ("chr7", 197, "C", "G", "1/1"),
+                ],
+                vec![
+                    ("chr7", 110, "C", "T", "1/1"),
+                    ("chr7", 156, "TA", "T", "1/1"),
+                    ("chr7", 181, "T", "TTG", "1/1"),
+                    (
+                        "chr7",
+                        197,
+                        "C",
+                        "CTGTGTGTGTGTGTGTGTGTG,CTGTGTGTGTGTGTGTGTGTGTG",
+                        "2/1",
+                    ),
+                ],
+            ),
+            (
+                "sentieon",
+                "chr13",
+                0,
+                105,
+                vec![
+                    ("chr13", 75, "T", "C", "0/1"),
+                    ("chr13", 85, "G", "T", "1/1"),
+                    ("chr13", 119, "C", "T", "1/1"),
+                    ("chr13", 128, "T", "TCTTCCTTCCTTCCTTCCTTCCTTC", "1/0"),
+                    ("chr13", 128, "T", "TCTTCCTTCCTTCCTTCCTTCCTTCCTTC", "0/1"),
+                    ("chr13", 156, "T", "C", "1/1"),
+                ],
+                vec![
+                    ("chr13", 75, "T", "C", "0/1"),
+                    ("chr13", 85, "G", "T", "1/1"),
+                    ("chr13", 119, "C", "T", "1/1"),
+                    ("chr13", 155, "T", "TCC", "1/1"),
+                    (
+                        "chr13",
+                        156,
+                        "T",
+                        "TTCCTTCCTTCCTTCCTTCCTTC,TTCCTTCCTTCCTTCCTTCCTTCCTTC",
+                        "2/1",
+                    ),
+                ],
+            ),
+        ];
+        for (name, chrom, bed_start, bed_end, truth_rows, query_rows) in cases {
+            let reference = std::fs::read_to_string(root.join(name).join("ref.fa"))
+                .unwrap()
+                .lines()
+                .filter(|line| !line.starts_with('>'))
+                .collect::<String>();
+            let on = |rows: Vec<(&str, usize, &str, &str, &str)>| {
+                rows.into_iter()
+                    .map(|(chrom, pos, r, alt, gt)| {
+                        let mut record = variant(pos, r, alt, gt);
+                        record.key.chrom = chrom.to_string();
+                        record
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let truth = on(truth_rows);
+            let query = on(query_rows);
+            let cluster = Cluster {
+                chrom: chrom.to_string(),
+                start: truth
+                    .iter()
+                    .chain(query.iter())
+                    .map(|v| v.key.pos)
+                    .min()
+                    .unwrap(),
+                end: truth
+                    .iter()
+                    .chain(query.iter())
+                    .map(|v| v.end_pos())
+                    .max()
+                    .unwrap(),
+                truth,
+                query,
+            };
+            let conf = [Interval {
+                chrom: chrom.to_string(),
+                start: bed_start,
+                end: bed_end,
+            }];
+            let mut counts = BTreeMap::new();
+            let mut subtype_counts = BTreeMap::new();
+            let mut rows = Vec::new();
+            process_cluster(
+                &cluster,
+                &BTreeMap::from([(chrom.to_string(), reference)]),
+                Some(&conf),
+                ComparisonConfig {
+                    no_hc: false,
+                    max_enum: 16_768,
+                    hb_expand: 30,
+                },
+                &mut counts,
+                &mut subtype_counts,
+                &mut rows,
+            )
+            .unwrap();
+            assert!(
+                rows.iter().any(|row| row.record.samples_contain(":TP:gm:")),
+                "{name} should keep the in-confidence match"
+            );
+            assert!(
+                rows.iter()
+                    .all(|row| !row.record.samples_contain(":UNK:lm:")),
+                "{name} hap:match block must keep BK=`.`, rows={:?}",
+                rows.iter()
+                    .map(|row| row.record.raw().to_line())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn outside_conf_aggregate_with_matching_phases_keeps_block_kind_missing() {
         let cluster = Cluster {
             chrom: "chr2".to_string(),
