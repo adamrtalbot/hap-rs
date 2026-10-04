@@ -998,7 +998,7 @@ fn aggregate_location_records_inner(
         let fields0: std::collections::BTreeSet<&str> = format0.split(':').collect();
         let fields1: std::collections::BTreeSet<&str> = format1.split(':').collect();
         let all_fields: Vec<&str> = fields0.union(&fields1).copied().collect();
-        
+
         // Reorder to match GT:AD:ADO:DP:... canonical order
         let mut ordered_fields: Vec<String> = Vec::new();
         for core in &["GT", "AD", "ADO", "DP"] {
@@ -1011,17 +1011,17 @@ fn aggregate_location_records_inner(
                 ordered_fields.push(field.to_string());
             }
         }
-        
+
         let unified_format = ordered_fields.join(":");
         for record in &mut records {
             let old_format = record.format.as_deref().unwrap_or("");
             let old_fields: Vec<&str> = old_format.split(':').collect();
-            
+
             let mut new_samples = Vec::new();
             for sample in &record.samples {
                 let old_values: Vec<&str> = sample.split(':').collect();
                 let mut new_values = Vec::new();
-                
+
                 for new_field in &ordered_fields {
                     if let Some(pos) = old_fields.iter().position(|f| *f == new_field.as_str()) {
                         new_values.push(old_values.get(pos).copied().unwrap_or("."));
@@ -1031,12 +1031,12 @@ fn aggregate_location_records_inner(
                 }
                 new_samples.push(new_values.join(":"));
             }
-            
+
             record.format = Some(unified_format.clone());
             record.samples = new_samples;
         }
     }
-    
+
     let mixed_insertion_order = |left: &RawVcfRecord, right: &RawVcfRecord| {
         let is_insertion =
             |record: &RawVcfRecord| record.ref_allele.len() == 1 && record.alt_allele.len() > 1;

@@ -2151,19 +2151,31 @@ mod tests {
         // The multiallelic at pos 5 decomposes to SNPs at positions 7 and 9.
         // Those should aggregate with the explicit query SNPs at the same positions
         // into single homalt rows, not stay as duplicate het rows.
-        assert_eq!(records.len(), 3, "multiallelic deletion + two aggregated SNPs");
-        let snp_7 = records
+        assert_eq!(
+            records.len(),
+            3,
+            "multiallelic deletion + two aggregated SNPs"
+        );
+        let pos_7_rows: Vec<_> = records
             .iter()
-            .find(|r| r.pos == 7 && r.alt_allele == "T")
-            .expect("SNP at position 7");
-        assert_eq!(snp_7.samples[0].split(':').next(), Some("1/1"), 
-                   "position 7 should be homalt, not two hets");
-        let snp_9 = records
+            .filter(|r| r.pos == 7 && r.alt_allele == "T")
+            .collect();
+        assert_eq!(pos_7_rows.len(), 1, "exactly one SNP row at position 7");
+        assert_eq!(
+            pos_7_rows[0].samples[0].split(':').next(),
+            Some("1/1"),
+            "position 7 should be homalt, not het"
+        );
+        let pos_9_rows: Vec<_> = records
             .iter()
-            .find(|r| r.pos == 9 && r.alt_allele == "T")
-            .expect("SNP at position 9");
-        assert_eq!(snp_9.samples[0].split(':').next(), Some("1/1"),
-                   "position 9 should be homalt, not two hets");
+            .filter(|r| r.pos == 9 && r.alt_allele == "T")
+            .collect();
+        assert_eq!(pos_9_rows.len(), 1, "exactly one SNP row at position 9");
+        assert_eq!(
+            pos_9_rows[0].samples[0].split(':').next(),
+            Some("1/1"),
+            "position 9 should be homalt, not het"
+        );
         Ok(())
     }
 

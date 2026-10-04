@@ -2,7 +2,7 @@
 ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
 ##FORMAT=<ID=GQ,Number=1,Type=Float,Description="Genotype Quality">
 ##INFO=<ID=votes,Number=1,Type=Integer,Description="votes">
-##contig=<ID=chr1,length=30>
+##contig=<ID=chr1,length=27>
 #CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	QUERY
 chr1	5	.	GAGAGATATATATAT	G,GATATATATATATAT	149.158	PASS	.	GT	1/2
 chr1	7	.	G	T	17.0188	PASS	votes=2	GT:GQ	0/1:17.02
