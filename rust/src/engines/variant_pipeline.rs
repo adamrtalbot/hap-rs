@@ -989,6 +989,54 @@ fn aggregate_location_records_inner(
     preserve_pair_order: bool,
     successor_present: bool,
 ) -> Vec<RawVcfRecord> {
+    // Normalize FORMAT fields before aggregation: if records have different FORMAT fields,
+    // expand all records to have the union of fields. This allows aggregation of records
+    // from different sources (e.g., decomposed multiallelic + explicit query SNP).
+    if records.len() == 2 && records[0].format != records[1].format {
+        let format0 = records[0].format.as_deref().unwrap_or("");
+        let format1 = records[1].format.as_deref().unwrap_or("");
+        let fields0: std::collections::BTreeSet<&str> = format0.split(':').collect();
+        let fields1: std::collections::BTreeSet<&str> = format1.split(':').collect();
+        let all_fields: Vec<&str> = fields0.union(&fields1).copied().collect();
+
+        // Reorder to match GT:AD:ADO:DP:... canonical order
+        let mut ordered_fields: Vec<String> = Vec::new();
+        for core in &["GT", "AD", "ADO", "DP"] {
+            if all_fields.contains(core) {
+                ordered_fields.push(core.to_string());
+            }
+        }
+        for field in &all_fields {
+            if !["GT", "AD", "ADO", "DP"].contains(field) {
+                ordered_fields.push(field.to_string());
+            }
+        }
+
+        let unified_format = ordered_fields.join(":");
+        for record in &mut records {
+            let old_format = record.format.as_deref().unwrap_or("");
+            let old_fields: Vec<&str> = old_format.split(':').collect();
+
+            let mut new_samples = Vec::new();
+            for sample in &record.samples {
+                let old_values: Vec<&str> = sample.split(':').collect();
+                let mut new_values = Vec::new();
+
+                for new_field in &ordered_fields {
+                    if let Some(pos) = old_fields.iter().position(|f| *f == new_field.as_str()) {
+                        new_values.push(old_values.get(pos).copied().unwrap_or("."));
+                    } else {
+                        new_values.push(".");
+                    }
+                }
+                new_samples.push(new_values.join(":"));
+            }
+
+            record.format = Some(unified_format.clone());
+            record.samples = new_samples;
+        }
+    }
+
     let mixed_insertion_order = |left: &RawVcfRecord, right: &RawVcfRecord| {
         let is_insertion =
             |record: &RawVcfRecord| record.ref_allele.len() == 1 && record.alt_allele.len() > 1;
