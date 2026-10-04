@@ -2131,6 +2131,43 @@ mod tests {
     }
 
     #[test]
+    fn ont_ensemble_decomposes_multiallelic_and_aggregates_with_explicit_snps() -> Result<()> {
+        let directory = tempdir()?;
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("verification/assets/fixtures/ont-ensemble-homalt");
+        let output = directory.path().join("prepared.vcf.gz");
+        let mut args = interval_args(
+            &fixture.join("query.vcf"),
+            &output,
+            &fixture.join("ref.fa"),
+            None,
+            None,
+        );
+        args.decompose = true;
+        args.gender = PreprocessGender::None;
+        args.threads = Some(1);
+        run(args)?;
+        let (_, records) = vcf::load_raw_vcf(&output)?;
+        // The multiallelic at pos 5 decomposes to SNPs at positions 7 and 9.
+        // Those should aggregate with the explicit query SNPs at the same positions
+        // into single homalt rows, not stay as duplicate het rows.
+        assert_eq!(records.len(), 3, "multiallelic deletion + two aggregated SNPs");
+        let snp_7 = records
+            .iter()
+            .find(|r| r.pos == 7 && r.alt_allele == "T")
+            .expect("SNP at position 7");
+        assert_eq!(snp_7.samples[0].split(':').next(), Some("1/1"), 
+                   "position 7 should be homalt, not two hets");
+        let snp_9 = records
+            .iter()
+            .find(|r| r.pos == 9 && r.alt_allele == "T")
+            .expect("SNP at position 9");
+        assert_eq!(snp_9.samples[0].split(':').next(), Some("1/1"),
+                   "position 9 should be homalt, not two hets");
+        Ok(())
+    }
+
+    #[test]
     fn decomposed_calls_bound_equivalent_insertion_padding() -> Result<()> {
         let directory = tempdir()?;
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
