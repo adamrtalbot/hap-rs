@@ -1827,7 +1827,11 @@ mod tests {
             vec![a.clone(), b.clone()],
             false,
         );
-        assert_eq!(merged.len(), 1, "shared FORMAT must allow hetalt aggregation");
+        assert_eq!(
+            merged.len(),
+            1,
+            "shared FORMAT must allow hetalt aggregation"
+        );
         assert!(merged[0].alt_allele.contains(','));
         // Writer-time bucketing may still diverge per-record; that is fine
         // after aggregation has already formed the hetalt.
