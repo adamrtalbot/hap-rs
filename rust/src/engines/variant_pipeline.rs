@@ -1017,6 +1017,7 @@ fn aggregate_location_records_inner(
         });
         let preserve_sorted_pair_order =
             preserve_pair_order || (has_insertion && has_deletion && has_snp && has_duplicate_snp);
+        let all_ordinary = records.iter().all(|record| !record.mixed_edit_primitive);
         if has_insertion && has_deletion && has_snp && !has_duplicate_snp {
             records.sort_by_key(|record| usize::from(!record_is_snp(record)));
         } else if !(has_insertion && has_deletion) || preserve_sorted_pair_order {
@@ -1024,7 +1025,11 @@ fn aggregate_location_records_inner(
                 let class = |record: &RawVcfRecord| {
                     if record_is_snp(record) {
                         0
-                    } else if record.ref_allele.len() > record.alt_allele.len() {
+                    } else if all_ordinary || record.ref_allele.len() > record.alt_allele.len() {
+                        // Unsplit padded calls retain a nonzero internal REF
+                        // span (VariantPrimitiveSplitter.cpp:169-199), so
+                        // VariantCompare orders these indels by REF length,
+                        // rather than moving their insertions after deletions.
                         1
                     } else {
                         2

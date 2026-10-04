@@ -2051,6 +2051,46 @@ mod tests {
     }
 
     #[test]
+    fn same_anchor_deletion_keeps_opposite_slot_hets_split() -> Result<()> {
+        let directory = tempdir()?;
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("verification/assets/fixtures/dragen-same-anchor-deletion");
+        let output = directory.path().join("prepared.vcf.gz");
+        let mut args = interval_args(
+            &fixture.join("query.vcf"),
+            &output,
+            &fixture.join("ref.fa"),
+            None,
+            None,
+        );
+        args.decompose = true;
+        args.gender = PreprocessGender::None;
+        args.threads = Some(1);
+        run(args)?;
+        let (_, records) = vcf::load_raw_vcf(&output)?;
+        assert_eq!(records.len(), 4);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| (
+                    record.pos,
+                    record.ref_allele.as_str(),
+                    record.alt_allele.as_str(),
+                    record.qual.as_str(),
+                    record.samples[0].split(':').next().unwrap(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (10, "G", "GAAAAAAA", "17.06", "0/1"),
+                (10, "G", "GAAAAAAAA", "10.5", "1/1"),
+                (10, "GA", "G", "7.69", "1/1"),
+                (10, "GAAAAAAAAAA", "G", "17.06", "0/1"),
+            ],
+        );
+        Ok(())
+    }
+
+    #[test]
     fn legacy_only_padded_successor_deletions_retain_repeat_aggregates() -> Result<()> {
         let directory = tempdir()?;
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))

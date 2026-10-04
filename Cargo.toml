@@ -29,6 +29,7 @@ include = [
     "/verification/assets/fixtures/prepared-aggregate/**",
     "/verification/assets/fixtures/pfda-deeptrio-repeat-rows/**",
     "/verification/assets/fixtures/dragen-multiallelic-rows/**",
+    "/verification/assets/fixtures/dragen-same-anchor-deletion/**",
     "/verification/assets/fixtures/gatk-spanning-star-deletions/**",
     "/verification/assets/fixtures/short-read-bk/**",
     "/verification/assets/fixtures/pre-matrix/all.bed",
