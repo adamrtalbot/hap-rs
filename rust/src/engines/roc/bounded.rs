@@ -3599,12 +3599,17 @@ where
     // Named stratifications are configured lanes, not merely observed axes.
     // QuantifyRegions registers each one when it loads the BED, so an empty
     // fourth-column child still receives zero-valued baseline ROC rows for
-    // every active variant type. Built-in TS_* lanes remain observation-led.
-    let mut observed_subsets = options
+    // every active variant type. Built-in TS_* lanes remain observation-led
+    // per type: BlockQuantify.cpp:244-261 keys them on the actual type, while
+    // RocOutput.cpp:284-318 seeds only configured region names. A confident
+    // SNP must not create empty INDEL TS_contained rows beside UNK indels.
+    let mut configured_subsets = options
         .subset_sizes
         .keys()
         .cloned()
         .collect::<BTreeSet<_>>();
+    configured_subsets.insert("*".to_string());
+    let mut observed_subsets = BTreeMap::<String, BTreeSet<String>>::new();
     // Track which non-PASS filter tags appeared per variant Type so we
     // pre-seed empty subtype rows only for filters that variant type
     // actually carries (e.g. SB filter is SNP-only in our chr21 data —
@@ -3613,7 +3618,6 @@ where
         String,
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
-    observed_subsets.insert("*".to_string());
     for row in rows {
         let row = row?;
         let row = row.borrow();
@@ -3621,7 +3625,10 @@ where
             row,
             options,
             |key, qq, counts, subtypes: &[String], bi: Option<&str>, blt: Option<&str>| {
-                observed_subsets.insert(key.subset.clone());
+                observed_subsets
+                    .entry(key.ty.clone())
+                    .or_default()
+                    .insert(key.subset.clone());
                 if key.filter != "ALL" && key.filter != "PASS" {
                     observed_filters_per_ty
                         .entry(key.ty.clone())
@@ -3653,6 +3660,10 @@ where
             ][..],
         ),
     ] {
+        let mut subsets = configured_subsets.clone();
+        if let Some(observed) = observed_subsets.get(ty) {
+            subsets.extend(observed.iter().cloned());
+        }
         for subtype in subtypes {
             // Per-Filter pre-seed: legacy emits one row per (Type,
             // Subtype, Subset='*', Filter=<observed-tag>) — including
@@ -3672,7 +3683,7 @@ where
                         .or_default();
                 }
             }
-            for subset in &observed_subsets {
+            for subset in &subsets {
                 let mut filters = vec!["ALL", "PASS"];
                 if !options.ignored_filters.is_empty() {
                     filters.push("SEL");
@@ -5109,6 +5120,46 @@ mod tests {
             fp_class,
             xcmp_ctype: None,
             xcmp_hap_match: false,
+        }
+    }
+
+    #[test]
+    fn legacy_only_builtin_subsets_are_observed_per_variant_type() {
+        let rows = vec![
+            annotated(
+                "chr1",
+                100,
+                "50",
+                ["0/1:TP:gm:tv:SNP:het:50", "0/1:TP:gm:tv:SNP:het:50"],
+                "CONF,TS_contained",
+                true,
+                None,
+            ),
+            annotated(
+                "chr1",
+                200,
+                "30",
+                ["./.:.:.:.:NOCALL:nocall:.", "0/1:UNK:.:i1_5:INDEL:het:30"],
+                "",
+                true,
+                None,
+            ),
+        ];
+        let groups = accumulate(&rows);
+        assert!(groups.contains_key(&RowKey::new("SNP", "*", "TS_contained", "ALL")));
+        assert!(groups.contains_key(&RowKey::new("INDEL", "*", "*", "ALL")));
+        assert!(
+            !groups
+                .keys()
+                .any(|key| key.ty == "INDEL" && key.subset == "TS_contained")
+        );
+        let mut options = RocOptions::default();
+        options.subset_sizes.insert("EXTRA_unused".to_string(), 1);
+        let configured = accumulate_with_options(&rows, &options);
+        for ty in ["SNP", "INDEL"] {
+            for filter in ["ALL", "PASS"] {
+                assert!(configured.contains_key(&RowKey::new(ty, "*", "EXTRA_unused", filter)));
+            }
         }
     }
 

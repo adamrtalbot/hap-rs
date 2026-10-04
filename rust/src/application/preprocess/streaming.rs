@@ -420,6 +420,16 @@ pub(super) struct LocationAggregatedRecords {
     ready: VecDeque<Result<ValidatedVcfRecord>>,
 }
 
+/// Whether a normalized call edits its first reference base rather than
+/// carrying that base as VCF padding. Right-padded insertions also consume no
+/// reference, even though their first REF and ALT bases can differ.
+fn starts_reference_edit(record: &RawVcfRecord) -> bool {
+    record.alt_allele.split(',').any(|alternate| {
+        record.ref_allele.as_bytes().first() != alternate.as_bytes().first()
+            && crate::domain::allele_edit_bits(&record.ref_allele, alternate) & 5 != 0
+    })
+}
+
 impl LocationAggregatedRecords {
     pub(super) fn new(inner: PreprocessRecords, enabled: bool) -> Self {
         Self {
@@ -462,15 +472,18 @@ impl Iterator for LocationAggregatedRecords {
             }
         }
 
-        // The legacy aggregator leaves an insertion + mixed-edit deletion split
-        // when the same stream carries a record at the anchor's next reference
-        // position (anchor + 1); `self.pending` is exactly that lookahead. Track
-        // which stream it belongs to so the merge decision stays stream-local.
+        // VariantPrimitiveSplitter.cpp:330-357 and Variant.hh:239-335 order
+        // edits by their internal reference span before normalization and
+        // aggregation. An edit consuming anchor + 1 can separate an insertion
+        // from its mixed-edit deletion. A VCF padding base at that position
+        // cannot: the pFDA successors GT>G, AT>A and AC>A consume anchor + 2.
+        // Keep this normalization-boundary lookahead local to its input stream.
         let successor_stream = self
             .pending
             .as_ref()
             .and_then(|entry| entry.as_ref().ok())
             .filter(|record| record.raw().chrom == chrom && record.raw().pos == pos + 1)
+            .filter(|record| starts_reference_edit(record.raw()))
             .map(|record| record.provenance().source_index().unwrap_or(0));
 
         let mut streams = BTreeMap::<usize, Vec<RawVcfRecord>>::new();
@@ -700,6 +713,29 @@ mod tests {
             samples: vec!["0/1".to_string()],
             mixed_edit_primitive: false,
             primitive_identity: identity,
+        }
+    }
+
+    #[test]
+    fn normative_reference_consumption_excludes_vcf_padding() {
+        for (reference, alternate, consumes) in [
+            ("C", "A", true),
+            ("GT", "T", true),
+            ("GT", "G", false),
+            ("AT", "A", false),
+            ("AC", "A", false),
+            ("G", "GT", false),
+            ("G", "TG", false),
+            ("G", "G", false),
+        ] {
+            let mut call = record(502, None);
+            call.ref_allele = reference.to_string();
+            call.alt_allele = alternate.to_string();
+            assert_eq!(
+                starts_reference_edit(&call),
+                consumes,
+                "{reference}>{alternate}"
+            );
         }
     }
 
