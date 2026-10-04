@@ -170,6 +170,12 @@ struct NormalizationCall {
 fn record_is_substitution(record: &crate::domain::RawVcfRecord) -> bool {
     let reference = record.ref_allele.as_bytes();
     record.alt_allele.split(',').any(|alt| {
+        // Spanning deletions (`*`) and other symbolic ALTs are not substitutions.
+        // Treating `*` as a one-base mismatch poisons the deletion-context
+        // pre-scan (GATK UYMUW chr10:99441167 GATTC>* beside ATTC>A).
+        if is_symbolic_allele(alt) {
+            return false;
+        }
         let alt = alt.as_bytes();
         !alt.starts_with(reference) && !reference.starts_with(alt)
     })
@@ -212,7 +218,8 @@ fn observe_following_spanning_deletions(
                 .alt_allele
                 .split(',')
                 .filter(|alternate| {
-                    record.ref_allele.len() > alternate.len()
+                    !is_symbolic_allele(alternate)
+                        && record.ref_allele.len() > alternate.len()
                         && record.ref_allele.starts_with(alternate)
                 })
                 .map(|alternate| record.ref_allele.len() - alternate.len())
@@ -255,8 +262,13 @@ fn observe_following_spanning_deletions(
     if record.ref_allele.len() <= 1 {
         return;
     }
+    // A spanning-deletion ALT (`*`) is a one-character symbolic allele, not a
+    // mixed-edit deletion. Classifying it as mixed makes the next real deletion
+    // a merge partner and collapses GATK opposite-slot rows such as
+    // `GATTC>G` + `ATTC>A` into one `GATTC>G,GA` aggregate (#82).
     let has_mixed_deletion = record.alt_allele.split(',').any(|alternate| {
-        alternate.len() == 1
+        !is_symbolic_allele(alternate)
+            && alternate.len() == 1
             && record
                 .ref_allele
                 .as_bytes()
@@ -289,7 +301,9 @@ fn observe_following_spanning_deletions(
     }
 
     if record.alt_allele.split(',').any(|alternate| {
-        record.ref_allele.len() > alternate.len() && record.ref_allele.starts_with(alternate)
+        !is_symbolic_allele(alternate)
+            && record.ref_allele.len() > alternate.len()
+            && record.ref_allele.starts_with(alternate)
     }) {
         deletions_by_position
             .entry((record.chrom.clone(), record.pos))
