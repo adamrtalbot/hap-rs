@@ -1,0 +1,26 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##FILTER=<ID=RefCall,Description="Genotyping model thinks this site is reference.">
+##FILTER=<ID=LowQual,Description="Confidence in this variant being real is below calling threshold.">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Conditional genotype quality">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=MIN_DP,Number=1,Type=Integer,Description="Minimum DP observed within the GVCF block.">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Read depth for each allele">
+##FORMAT=<ID=VAF,Number=A,Type=Float,Description="Variant allele fractions.">
+##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred-scaled genotype likelihoods rounded to the closest integer">
+##contig=<ID=chr1,length=1001>
+##contig=<ID=chr2,length=1001>
+##contig=<ID=chr3,length=1001>
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	HG002
+chr1	501	.	G	GGTGT	43.7	PASS	.	GT:GQ:DP:AD:VAF:PL	1/0:15:27:2,9:0.333333:43,18,37
+chr1	501	.	GG	T	43.7	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:15:27:2,9:0.333333:43,18,37
+chr1	502	.	GT	G	21.2	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:19:26:17,9:0.346154:21,0,24
+chr1	758	.	A	G	62.9	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:63:43:25,18:0.418605:62,0,76
+chr2	136	.	C	G	69.7	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:65:38:15,23:0.605263:69,0,67
+chr2	501	.	A	AAATAT	33.3	PASS	.	GT:GQ:DP:AD:VAF:PL	1/0:10:34:6,20:0.588235:32,14,13
+chr2	501	.	AA	T	33.3	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:10:34:6,5:0.147059:32,14,29
+chr2	502	.	AT	A	5.8	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:6:33:28,5:0.151515:4,0,20
+chr3	501	.	A	AACACACACAC	45.4	PASS	.	GT:GQ:DP:AD:VAF:PL	1/0:16:47:0,22:0.468085:45,19,33
+chr3	501	.	AA	C	45.4	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:16:47:0,14:0.297872:45,19,31
+chr3	502	.	AC	A	11.2	PASS	.	GT:GQ:DP:AD:VAF:PL	0/1:11:45:31,14:0.311111:10,0,22

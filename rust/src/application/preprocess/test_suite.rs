@@ -2007,6 +2007,46 @@ mod tests {
     }
 
     #[test]
+    fn legacy_only_padded_successor_deletions_retain_repeat_aggregates() -> Result<()> {
+        let directory = tempdir()?;
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("verification/assets/fixtures/pfda-deeptrio-repeat-rows");
+        for threads in [1, 2] {
+            let output = directory.path().join(format!("prepared-{threads}.vcf.gz"));
+            let mut args = interval_args(
+                &fixture.join("query.vcf"),
+                &output,
+                &fixture.join("ref.fa"),
+                None,
+                None,
+            );
+            args.decompose = true;
+            args.gender = PreprocessGender::None;
+            args.threads = Some(threads);
+            run(args)?;
+            let (_, records) = vcf::load_raw_vcf(&output)?;
+            assert_eq!(records.len(), 11, "threads={threads}");
+            for (chrom, reference, alternate, successor_ref) in [
+                ("chr1", "GG", "GGTGTG,G", "GT"),
+                ("chr2", "AA", "AAATATA,A", "AT"),
+                ("chr3", "AA", "AACACACACACA,A", "AC"),
+            ] {
+                let aggregate = records
+                    .iter()
+                    .find(|record| record.chrom == chrom && record.alt_allele == alternate)
+                    .expect("pinned prepared hetalt aggregate");
+                assert_eq!(aggregate.pos, 501);
+                assert_eq!(aggregate.ref_allele, reference);
+                assert_eq!(aggregate.samples[0].split(':').next(), Some("2/1"));
+                assert!(records.iter().any(|record| {
+                    record.chrom == chrom && record.pos == 502 && record.ref_allele == successor_ref
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn decomposed_calls_bound_equivalent_insertion_padding() -> Result<()> {
         let directory = tempdir()?;
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))

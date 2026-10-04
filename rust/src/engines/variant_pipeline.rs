@@ -958,7 +958,7 @@ pub(crate) fn aggregate_location_records(records: Vec<RawVcfRecord>) -> Vec<RawV
 ///
 /// Legacy merges an ordinary insertion and a mixed-edit deletion sharing an
 /// anchor into one het-alt record, but leaves them split when another variant
-/// sits at the deletion's first deleted base (anchor + 1). Measured against the
+/// consumes the deletion's first deleted base (anchor + 1). Measured against the
 /// pinned hap.py 0.3.15 aggregator: chr1:152194725 (no anchor+1 record) merges,
 /// chr11:95814076 (a record at anchor+1) stays split.
 #[cfg(test)]
@@ -1126,10 +1126,11 @@ fn aggregate_location_records_inner(
             && is_deletion(&records[0])
             && records[0].mixed_edit_primitive);
     if opposite_slots && ordinary_insertion_with_mixed_deletion && successor_present {
-        // A variant at the deletion's first deleted base (anchor + 1) blocks the
+        // An edit consuming the deletion's first deleted base (anchor + 1) blocks the
         // legacy aggregator from folding the pair into a het-alt. Without one it
         // merges (chr1:152194725), so only keep them split when the successor is
-        // present (chr11:95814076).
+        // present (chr11:95814076). A neighboring VCF padding base is not such
+        // an edit; the ordered stream resolves that distinction before calling.
         return records;
     }
     let both_deletions = records
