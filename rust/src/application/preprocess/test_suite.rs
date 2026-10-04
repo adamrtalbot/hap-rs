@@ -1801,7 +1801,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn af_zero_vs_fraction_keeps_shared_format_order_before_writer_bucket() {
         // Opposite-slot DRAGEN alleles after split/normalize carry AF=0 and
         // AF=0.778. Value-based type bucketing would put AF in different
@@ -1845,6 +1844,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn somatic_conversion_uses_legacy_gt_modes_and_preserves_sample_formats_in_info() {
         let mut record = make_record("SOMATIC");
         record.alt_allele = "C,G".to_string();
