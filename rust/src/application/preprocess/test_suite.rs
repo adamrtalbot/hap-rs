@@ -2464,6 +2464,41 @@ mod tests {
     }
 
     #[test]
+    fn spanning_star_allele_is_not_a_mixed_deletion_merge_partner() {
+        // UYMUW GATK chr10:99441167–99441168 after bcftools -m-any: a called
+        // spanning deletion (`GATTC>*`) sits beside the real opposite-slot
+        // deletions `GATTC>G` and `ATTC>A`. Legacy VariantCallsOnly drops `*`
+        // and never classifies it as a mixed-edit deletion, so the two real
+        // rows stay split. Treating `*` as mixed would mark `ATTC>A` as a
+        // merge partner and collapse them into `GATTC>G,GA` (#82).
+        let upstream = record_at(99441166, "TG", "T");
+        let star = record_at(99441167, "GATTC", "*");
+        let real = record_at(99441167, "GATTC", "G");
+        let following = record_at(99441168, "ATTC", "A");
+        let following_identity = (
+            "chr1".to_string(),
+            99441168,
+            "ATTC".to_string(),
+            "A".to_string(),
+        );
+        let star_identity = (
+            "chr1".to_string(),
+            99441167,
+            "GATTC".to_string(),
+            "*".to_string(),
+        );
+
+        assert!(!record_is_substitution(&star));
+        let (spanning, equal_floor, released_following, merge_partners) =
+            observe_anchor_context(&[upstream, star, real, following]);
+
+        assert!(!spanning.contains(&star_identity));
+        assert!(!equal_floor.contains(&star_identity));
+        assert!(!released_following.contains(&following_identity));
+        assert!(!merge_partners.contains(&following_identity));
+    }
+
+    #[test]
     fn parallel_blocksplit_omits_empty_partitions_but_falls_back_when_all_are_empty() -> Result<()>
     {
         let directory = tempdir()?;

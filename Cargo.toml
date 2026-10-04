@@ -27,6 +27,7 @@ include = [
     "/verification/assets/fixtures/ftx-bam/reads.bam.bai",
     "/verification/assets/fixtures/pre-decomposed-shift-floor/**",
     "/verification/assets/fixtures/prepared-aggregate/**",
+    "/verification/assets/fixtures/gatk-spanning-star-deletions/**",
     "/verification/assets/fixtures/short-read-bk/**",
     "/verification/assets/fixtures/pre-matrix/all.bed",
     "/verification/assets/fixtures/pre-matrix/input-bcf.source.vcf",

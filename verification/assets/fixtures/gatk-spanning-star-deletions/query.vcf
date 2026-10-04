@@ -1,0 +1,12 @@
+##fileformat=VCFv4.2
+##contig=<ID=chr10,length=121>
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">
+##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	QUERY
+chr10	67	.	TG	T	486.6	.	.	GT:AD:DP:GQ	0/1:20,17:38:99
+chr10	68	.	GATTC	*	495.01	.	.	GT:AD:DP:GQ	1/0:0,17:33:99
+chr10	68	.	GATTC	G	495.01	.	.	GT:AD:DP:GQ	0/1:0,15:33:99
+chr10	69	.	ATTC	A	565.01	.	.	GT:AD:DP:GQ	1/0:0,17:33:99
+chr10	69	.	ATTC	*	565.01	.	.	GT:AD:DP:GQ	0/1:0,15:33:99
