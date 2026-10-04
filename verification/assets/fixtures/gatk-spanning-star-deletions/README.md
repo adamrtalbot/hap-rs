@@ -22,6 +22,8 @@ classified `ALT=*` as a mixed-edit deletion in the spanning pre-scan, marked
 `GATTC>G,GA` hetalt — undercounting INDEL QUERY.TOTAL/UNK by one at this
 locus (and likewise at the other reported UYMUW blocks).
 
-PREPY/HAPPY both must keep the three indel rows. Confidence covers only the
-decoy truth SNP so the indels remain UNK, matching the reported annotation
-class.
+PREPY/HAPPY both must keep the three indel rows. Confidence covers only an
+interior decoy SNP (`chr10:30 C>G`, matched in truth and query as TP) so the
+indel block remains UNK, matching the reported annotation class. The decoy
+sits well inside `confident.bed` (`chr10 20 40`) to avoid TS_boundary / BK=lm
+edge disagreements between engines.
